@@ -53,18 +53,18 @@ export default function TabLayout() {
       <Tabs.Screen
         name="overlap"
         options={{
-          title: 'Overlap',
+          title: 'Portfolio',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="layers" size={size} color={color} />
+            <Ionicons name="pie-chart" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="dividends"
+        name="settings"
         options={{
-          title: 'Dividends',
+          title: 'Settings',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cash" size={size} color={color} />
+            <Ionicons name="settings" size={size} color={color} />
           ),
         }}
       />
