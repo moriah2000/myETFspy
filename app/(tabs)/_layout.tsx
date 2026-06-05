@@ -17,27 +17,36 @@ export default function TabLayout() {
         tabBarActiveTintColor: '#338DFF',
         tabBarInactiveTintColor: '#2A3A54',
         tabBarLabelStyle: {
-          fontSize: 10,
+          fontSize: 9,
           fontWeight: '500',
-          letterSpacing: 0.5,
+          letterSpacing: 0.3,
         },
         tabBarHideOnKeyboard: true,
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Portfolio',
+          title: 'Home',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="pie-chart" size={size} color={color} />
+            <Ionicons name="home" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="dividends"
+        name="explore"
         options={{
-          title: 'Dividends',
+          title: 'Watchlist',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cash" size={size} color={color} />
+            <Ionicons name="eye" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="alerts"
+        options={{
+          title: 'Alerts',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="notifications" size={size} color={color} />
           ),
         }}
       />
@@ -51,11 +60,11 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="dividends"
         options={{
-          title: 'Watchlist',
+          title: 'Dividends',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="eye" size={size} color={color} />
+            <Ionicons name="cash" size={size} color={color} />
           ),
         }}
       />
