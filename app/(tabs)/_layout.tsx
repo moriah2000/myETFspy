@@ -53,9 +53,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="explore"
         options={{
-          title: 'ETF',
+          title: 'Watchlist',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bar-chart" size={size} color={color} />
+            <Ionicons name="eye" size={size} color={color} />
           ),
         }}
       />

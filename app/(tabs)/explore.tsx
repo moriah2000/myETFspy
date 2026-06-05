@@ -1,107 +1,68 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { getETFHoldings, getETFPrice } from '../services/api';
+import { useState } from 'react';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-export default function ETFScreen() {
-  const [price, setPrice] = useState<any>(null);
-  const [holdings, setHoldings] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+const DEFAULT_WATCHLIST = [
+  { ticker: 'SCHD', name: 'Schwab US Dividend Equity ETF', yield: '3.65%' },
+  { ticker: 'QQQM', name: 'Invesco NASDAQ 100 ETF', yield: '0.64%' },
+  { ticker: 'VTI', name: 'Vanguard Total Stock Market ETF', yield: '1.52%' },
+  { ticker: 'JEPI', name: 'JPMorgan Equity Premium Income ETF', yield: '6.19%' },
+  { ticker: 'SPY', name: 'SPDR S&P 500 ETF Trust', yield: '1.28%' },
+];
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [priceData, holdingsData] = await Promise.all([
-          getETFPrice('VTI'),
-          getETFHoldings('VTI'),
-        ]);
-        setPrice(priceData);
-        setHoldings(holdingsData.slice(0, 5));
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, []);
+export default function WatchlistScreen() {
+  const [search, setSearch] = useState('');
+  const [watchlist] = useState(DEFAULT_WATCHLIST);
 
-  if (loading) return (
-    <View style={{ flex: 1, backgroundColor: '#0B0F19', justifyContent: 'center', alignItems: 'center' }}>
-      <ActivityIndicator color="#338DFF" size="large" />
-    </View>
+  const filtered = watchlist.filter(etf =>
+    etf.ticker.toLowerCase().includes(search.toLowerCase()) ||
+    etf.name.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
     <ScrollView style={styles.container}>
-
-      {/* ETF Hero */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroTop}>
-          <View style={styles.tickerBox}>
-            <Text style={styles.tickerText}>VTI</Text>
-          </View>
-          <View>
-            <Text style={styles.etfName}>Vanguard Total Market ETF</Text>
-            <Text style={styles.etfMeta}>NYSE Arca · Equity · Blend</Text>
-          </View>
-        </View>
-        <View style={styles.heroStats}>
-          <View>
-            <Text style={styles.metaLabel}>PRICE</Text>
-            <Text style={styles.metaValue}>${price?.price?.toFixed(2) ?? '—'}</Text>
-          </View>
-          <View>
-            <Text style={styles.metaLabel}>DAY CHANGE</Text>
-            <Text style={[styles.metaValue, { color: price?.change >= 0 ? '#00C896' : '#FF5A5F' }]}>
-              {price?.change >= 0 ? '+' : ''}{price?.change?.toFixed(2) ?? '—'}
-            </Text>
-          </View>
-          <View>
-            <Text style={styles.metaLabel}>CHANGE %</Text>
-            <Text style={[styles.metaValue, { color: price?.changesPercentage >= 0 ? '#00C896' : '#FF5A5F' }]}>
-              {price?.changesPercentage >= 0 ? '+' : ''}{price?.changesPercentage?.toFixed(2) ?? '—'}%
-            </Text>
-          </View>
-        </View>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Watchlist</Text>
+        <TouchableOpacity style={styles.addButton}>
+          <Text style={styles.addButtonText}>+ Add</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Metrics Grid */}
-      <Text style={styles.sectionTitle}>OVERVIEW</Text>
-      <View style={styles.metricsGrid}>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>MARKET CAP</Text>
-          <Text style={styles.metricValue}>${((price?.marketCap ?? 0) / 1e9).toFixed(0)}B</Text>
-          <Text style={styles.metricSub}>total market cap</Text>
-        </View>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>52W HIGH</Text>
-          <Text style={styles.metricValue}>${price?.yearHigh?.toFixed(2) ?? '—'}</Text>
-          <Text style={styles.metricSub}>52 week high</Text>
-        </View>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>52W LOW</Text>
-          <Text style={styles.metricValue}>${price?.yearLow?.toFixed(2) ?? '—'}</Text>
-          <Text style={styles.metricSub}>52 week low</Text>
-        </View>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>AVG VOLUME</Text>
-          <Text style={styles.metricValue}>{((price?.avgVolume ?? 0) / 1e6).toFixed(1)}M</Text>
-          <Text style={styles.metricSub}>avg daily volume</Text>
-        </View>
+      <View style={styles.searchContainer}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search ETFs..."
+          placeholderTextColor="#3A5070"
+          value={search}
+          onChangeText={setSearch}
+        />
       </View>
 
-      {/* Top Holdings */}
-      <Text style={styles.sectionTitle}>TOP HOLDINGS</Text>
-      {holdings.map((item) => (
-        <View key={item.asset} style={styles.holdingRow}>
-          <View style={styles.holdingIcon}>
-            <Text style={styles.holdingTicker}>{item.asset}</Text>
+      <View style={styles.filterRow}>
+        {['All ETFs', 'Dividend', 'Growth', 'Bond'].map((f, i) => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filterTab, i === 0 && styles.filterTabActive]}>
+            <Text style={[styles.filterTabText, i === 0 && styles.filterTabTextActive]}>{f}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {filtered.map((etf) => (
+        <TouchableOpacity key={etf.ticker} style={styles.etfRow}>
+          <View style={styles.etfIcon}>
+            <Text style={styles.etfTicker}>{etf.ticker}</Text>
           </View>
-          <Text style={styles.holdingName}>{item.name}</Text>
-          <Text style={styles.holdingWeight}>{item.weightPercentage?.toFixed(2)}%</Text>
-        </View>
+          <View style={styles.etfInfo}>
+            <Text style={styles.etfName} numberOfLines={1}>{etf.name}</Text>
+            <Text style={styles.etfYield}>Yield {etf.yield}</Text>
+          </View>
+          <View style={styles.etfRight}>
+            <Text style={styles.etfChange}>+1.32%</Text>
+            <Text style={styles.etfPrice}>$78.93</Text>
+          </View>
+        </TouchableOpacity>
       ))}
-
     </ScrollView>
   );
 }
@@ -112,100 +73,77 @@ const styles = StyleSheet.create({
     backgroundColor: '#0B0F19',
     padding: 16,
   },
-  heroCard: {
-    backgroundColor: '#141A26',
-    borderRadius: 16,
-    padding: 20,
-    marginTop: 60,
-    borderWidth: 0.5,
-    borderColor: 'rgba(102,175,255,0.2)',
-    marginBottom: 24,
-  },
-  heroTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 16,
-  },
-  tickerBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 10,
-    backgroundColor: '#0D1830',
-    borderWidth: 0.5,
-    borderColor: 'rgba(51,141,255,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tickerText: {
-    fontSize: 13,
-    color: '#338DFF',
-    fontWeight: '600',
-  },
-  etfName: {
-    fontSize: 15,
-    color: '#C8D8F0',
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  etfMeta: {
-    fontSize: 11,
-    color: '#4A6080',
-  },
-  heroStats: {
+  header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 60,
+    marginBottom: 16,
   },
-  metaLabel: {
-    fontSize: 10,
-    color: '#3A5070',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  metaValue: {
-    fontSize: 16,
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '700',
     color: '#E8EEF8',
-    fontWeight: '500',
   },
-  sectionTitle: {
-    fontSize: 11,
-    color: '#4A6A9A',
-    letterSpacing: 1.5,
-    marginBottom: 10,
+  addButton: {
+    backgroundColor: '#338DFF',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
-  metricsGrid: {
+  addButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  searchContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 24,
-  },
-  metricCard: {
-    backgroundColor: '#141A26',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.06)',
-    width: '47.5%',
-  },
-  metricLabel: {
-    fontSize: 10,
-    color: '#3A5070',
-    letterSpacing: 0.8,
-    marginBottom: 6,
-  },
-  metricValue: {
-    fontSize: 20,
-    color: '#E8EEF8',
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  metricSub: {
-    fontSize: 10,
-    color: '#4A6080',
-  },
-  holdingRow: {
+    alignItems: 'center',
     backgroundColor: '#141A26',
     borderRadius: 10,
+    paddingHorizontal: 12,
+    marginBottom: 14,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  searchIcon: {
+    fontSize: 14,
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: 44,
+    color: '#E8EEF8',
+    fontSize: 14,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  filterTab: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#141A26',
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  filterTabActive: {
+    backgroundColor: '#338DFF',
+    borderColor: '#338DFF',
+  },
+  filterTabText: {
+    fontSize: 12,
+    color: '#4A6080',
+    fontWeight: '500',
+  },
+  filterTabTextActive: {
+    color: '#FFFFFF',
+  },
+  etfRow: {
+    backgroundColor: '#141A26',
+    borderRadius: 12,
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -214,27 +152,44 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: 'rgba(255,255,255,0.06)',
   },
-  holdingIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
+  etfIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
     backgroundColor: '#0D1830',
     borderWidth: 0.5,
     borderColor: 'rgba(51,141,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  holdingTicker: {
-    fontSize: 9,
+  etfTicker: {
+    fontSize: 10,
     color: '#338DFF',
     fontWeight: '600',
   },
-  holdingName: {
+  etfInfo: {
     flex: 1,
+  },
+  etfName: {
     fontSize: 13,
     color: '#C8D8F0',
+    fontWeight: '500',
+    marginBottom: 4,
   },
-  holdingWeight: {
+  etfYield: {
+    fontSize: 11,
+    color: '#4A6080',
+  },
+  etfRight: {
+    alignItems: 'flex-end',
+  },
+  etfChange: {
+    fontSize: 13,
+    color: '#00C896',
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  etfPrice: {
     fontSize: 13,
     color: '#E8EEF8',
     fontWeight: '500',
