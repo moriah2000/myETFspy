@@ -33,7 +33,7 @@ export default function OnboardingScreen() {
     if (current < slides.length - 1) {
       setCurrent(current + 1);
     } else {
-      router.replace('/(tabs)');
+      router.replace('/setup');
     }
   }
 
