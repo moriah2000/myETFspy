@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
@@ -10,6 +11,7 @@ const DEFAULT_WATCHLIST = [
 ];
 
 export default function WatchlistScreen() {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [watchlist] = useState(DEFAULT_WATCHLIST);
 
@@ -17,6 +19,11 @@ export default function WatchlistScreen() {
     etf.ticker.toLowerCase().includes(search.toLowerCase()) ||
     etf.name.toLowerCase().includes(search.toLowerCase())
   );
+
+  function goToETF(ticker: string) {
+    router.push({pathname: '/etf/[ticker]', params:
+  {ticker: ticker}});
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -49,7 +56,10 @@ export default function WatchlistScreen() {
       </View>
 
       {filtered.map((etf) => (
-        <TouchableOpacity key={etf.ticker} style={styles.etfRow}>
+        <TouchableOpacity
+          key={etf.ticker}
+          style={styles.etfRow}
+          onPress={() => goToETF(etf.ticker)}>
           <View style={styles.etfIcon}>
             <Text style={styles.etfTicker}>{etf.ticker}</Text>
           </View>
@@ -68,130 +78,26 @@ export default function WatchlistScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0B0F19',
-    padding: 16,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 60,
-    marginBottom: 16,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#E8EEF8',
-  },
-  addButton: {
-    backgroundColor: '#338DFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  addButtonText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#141A26',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    marginBottom: 14,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  searchIcon: {
-    fontSize: 14,
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    height: 44,
-    color: '#E8EEF8',
-    fontSize: 14,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 16,
-  },
-  filterTab: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: '#141A26',
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  filterTabActive: {
-    backgroundColor: '#338DFF',
-    borderColor: '#338DFF',
-  },
-  filterTabText: {
-    fontSize: 12,
-    color: '#4A6080',
-    fontWeight: '500',
-  },
-  filterTabTextActive: {
-    color: '#FFFFFF',
-  },
-  etfRow: {
-    backgroundColor: '#141A26',
-    borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 8,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-  etfIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: '#0D1830',
-    borderWidth: 0.5,
-    borderColor: 'rgba(51,141,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  etfTicker: {
-    fontSize: 10,
-    color: '#338DFF',
-    fontWeight: '600',
-  },
-  etfInfo: {
-    flex: 1,
-  },
-  etfName: {
-    fontSize: 13,
-    color: '#C8D8F0',
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  etfYield: {
-    fontSize: 11,
-    color: '#4A6080',
-  },
-  etfRight: {
-    alignItems: 'flex-end',
-  },
-  etfChange: {
-    fontSize: 13,
-    color: '#00C896',
-    fontWeight: '500',
-    marginBottom: 2,
-  },
-  etfPrice: {
-    fontSize: 13,
-    color: '#E8EEF8',
-    fontWeight: '500',
-  },
+  container: { flex: 1, backgroundColor: '#0B0F19', padding: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 60, marginBottom: 16 },
+  headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
+  addButton: { backgroundColor: '#338DFF', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+  addButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#141A26', borderRadius: 10, paddingHorizontal: 12, marginBottom: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
+  searchIcon: { fontSize: 14, marginRight: 8 },
+  searchInput: { flex: 1, height: 44, color: '#E8EEF8', fontSize: 14 },
+  filterRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  filterTab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8, backgroundColor: '#141A26', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
+  filterTabActive: { backgroundColor: '#338DFF', borderColor: '#338DFF' },
+  filterTabText: { fontSize: 12, color: '#4A6080', fontWeight: '500' },
+  filterTabTextActive: { color: '#FFFFFF' },
+  etfRow: { backgroundColor: '#141A26', borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
+  etfIcon: { width: 44, height: 44, borderRadius: 10, backgroundColor: '#0D1830', borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  etfTicker: { fontSize: 10, color: '#338DFF', fontWeight: '600' },
+  etfInfo: { flex: 1 },
+  etfName: { fontSize: 13, color: '#C8D8F0', fontWeight: '500', marginBottom: 4 },
+  etfYield: { fontSize: 11, color: '#4A6080' },
+  etfRight: { alignItems: 'flex-end' },
+  etfChange: { fontSize: 13, color: '#00C896', fontWeight: '500', marginBottom: 2 },
+  etfPrice: { fontSize: 13, color: '#E8EEF8', fontWeight: '500' },
 });
