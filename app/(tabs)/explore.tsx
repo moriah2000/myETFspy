@@ -14,7 +14,6 @@ const DEFAULT_WATCHLIST = [
 export default function WatchlistScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
-  const [watchlist] = useState(DEFAULT_WATCHLIST);
   const [prices, setPrices] = useState<{[key: string]: any}>({});
   const [loading, setLoading] = useState(true);
 
@@ -38,7 +37,7 @@ export default function WatchlistScreen() {
     loadPrices();
   }, []);
 
-  const filtered = watchlist.filter(etf =>
+  const filtered = DEFAULT_WATCHLIST.filter(etf =>
     etf.ticker.toLowerCase().includes(search.toLowerCase()) ||
     etf.name.toLowerCase().includes(search.toLowerCase())
   );

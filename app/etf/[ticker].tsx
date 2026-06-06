@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { getETFPrice } from '../services/api';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { getETFDividends, getETFPrice } from '../services/api';
 
 const TABS = ['Overview', 'Holdings', 'Dividends', 'Alerts'];
 
@@ -16,18 +16,33 @@ const HOLDINGS = [
   { ticker: 'LLY', name: 'Eli Lilly and Co.', weight: '2.27%' },
 ];
 
+const ETF_NAMES: {[key: string]: string} = {
+  SCHD: 'Schwab US Dividend Equity ETF',
+  VTI: 'Vanguard Total Stock Market ETF',
+  QQQM: 'Invesco NASDAQ 100 ETF',
+  JEPI: 'JPMorgan Equity Premium Income ETF',
+  SPY: 'SPDR S&P 500 ETF Trust',
+  VOO: 'Vanguard S&P 500 ETF',
+  VXUS: 'Vanguard Total International ETF',
+};
+
 export default function ETFDetailScreen() {
   const { ticker } = useLocalSearchParams();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState('Overview');
   const [price, setPrice] = useState<any>(null);
+  const [dividends, setDividends] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
       try {
-        const data = await getETFPrice(ticker as string);
-        setPrice(data);
+        const [priceData, dividendsData] = await Promise.all([
+          getETFPrice(ticker as string),
+          getETFDividends(ticker as string),
+        ]);
+        setPrice(priceData);
+        setDividends(dividendsData);
       } catch (e) {
         console.error(e);
       } finally {
@@ -36,6 +51,8 @@ export default function ETFDetailScreen() {
     }
     loadData();
   }, [ticker]);
+
+  const etfName = ETF_NAMES[ticker as string] ?? (ticker + ' ETF');
 
   return (
     <View style={styles.container}>
@@ -53,19 +70,17 @@ export default function ETFDetailScreen() {
 
       {/* Price Hero */}
       <View style={styles.priceHero}>
-        <Text style={styles.etfName}>
-          {ticker === 'SCHD' ? 'Schwab US Dividend Equity ETF' :
-           ticker === 'VTI' ? 'Vanguard Total Stock Market ETF' :
-           ticker === 'QQQM' ? 'Invesco NASDAQ 100 ETF' :
-           ticker === 'JEPI' ? 'JPMorgan Equity Premium Income ETF' :
-           `${ticker} ETF`}
-        </Text>
-        <Text style={styles.price}>
-          ${loading ? '...' : price?.price?.toFixed(2) ?? '—'}
-        </Text>
-        <Text style={[styles.change, { color: (price?.change ?? 0) >= 0 ? '#00C896' : '#FF5A5F' }]}>
-          {(price?.change ?? 0) >= 0 ? '+' : ''}{price?.change?.toFixed(2) ?? '—'} ({price?.changesPercentage?.toFixed(2) ?? '—'}%) Today
-        </Text>
+        <Text style={styles.etfName}>{etfName}</Text>
+        {loading ? (
+          <ActivityIndicator color="#338DFF" size="small" style={{ marginVertical: 10 }} />
+        ) : (
+          <>
+            <Text style={styles.price}>${price?.price?.toFixed(2) ?? '—'}</Text>
+            <Text style={[styles.change, { color: (price?.change ?? 0) >= 0 ? '#00C896' : '#FF5A5F' }]}>
+              {(price?.change ?? 0) >= 0 ? '+' : ''}{price?.change?.toFixed(2) ?? '—'} ({price?.changesPercentage?.toFixed(2) ?? '—'}%) Today
+            </Text>
+          </>
+        )}
       </View>
 
       {/* Sub Tabs */}
@@ -165,6 +180,22 @@ export default function ETFDetailScreen() {
                 <Text style={[styles.upcomingValue, { color: '#00C896' }]}>$0.1930</Text>
               </View>
             </View>
+
+            <Text style={styles.sectionLabel}>Dividend History</Text>
+            {loading ? (
+              <ActivityIndicator color="#338DFF" />
+            ) : dividends.length === 0 ? (
+              <Text style={{ color: '#4A6080', fontSize: 13 }}>No dividend data available.</Text>
+            ) : (
+              dividends.map((d: any, i: number) => (
+                <View key={i} style={[styles.upcomingCard, { marginBottom: 8 }]}>
+                  <View style={styles.upcomingRow}>
+                    <Text style={styles.upcomingLabel}>{d.date}</Text>
+                    <Text style={[styles.upcomingValue, { color: '#00C896' }]}>${d.amount}</Text>
+                  </View>
+                </View>
+              ))
+            )}
           </View>
         )}
 
@@ -223,7 +254,7 @@ const styles = StyleSheet.create({
   divDivider: { width: 0.5, backgroundColor: 'rgba(255,255,255,0.06)' },
   divStatLabel: { fontSize: 10, color: '#3A5070', letterSpacing: 0.8, marginBottom: 6 },
   divStatValue: { fontSize: 20, fontWeight: '600', color: '#00C896' },
-  upcomingCard: { backgroundColor: '#141A26', borderRadius: 14, padding: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
+  upcomingCard: { backgroundColor: '#141A26', borderRadius: 14, padding: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16 },
   upcomingRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)' },
   upcomingLabel: { fontSize: 13, color: '#4A6080' },
   upcomingValue: { fontSize: 13, color: '#E8EEF8', fontWeight: '500' },
