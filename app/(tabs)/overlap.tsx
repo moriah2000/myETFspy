@@ -1,19 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  ActivityIndicator,
-  LayoutAnimation,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  UIManager,
-  View,
+  ActivityIndicator, LayoutAnimation, Platform,
+  RefreshControl, ScrollView, StatusBar, StyleSheet,
+  Text, TouchableOpacity, UIManager, View,
 } from 'react-native';
-import { getETFPrice, getETFTopHoldings } from '../services/api';
+import Svg, { Circle, G, Polyline } from 'react-native-svg';
+import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
+import { getETFTopHoldings } from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -21,7 +15,6 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 type Holding = { symbol: string; name: string; weight: number };
 type HoldingsMap = Record<string, Holding[]>;
-type LiveETF = { ticker: string; price: number; change: number; pct: number; value: number };
 
 function computeShared(h1: Holding[], h2: Holding[]) {
   const map2 = new Map(h2.map((h) => [h.symbol, h]));
@@ -33,8 +26,7 @@ function computeShared(h1: Holding[], h2: Holding[]) {
 
 function overlapScore(h1: Holding[], h2: Holding[]): number {
   const shared = computeShared(h1, h2);
-  const score = shared.reduce((acc, h) => acc + Math.min(h.w1, h.w2), 0);
-  return Math.min(Math.round(score), 100);
+  return Math.min(Math.round(shared.reduce((acc, h) => acc + Math.min(h.w1, h.w2), 0)), 100);
 }
 
 function scoreColor(score: number) {
@@ -42,7 +34,6 @@ function scoreColor(score: number) {
   if (score >= 30) return '#FF9F43';
   return '#00C896';
 }
-
 function scoreLabel(score: number) {
   if (score >= 60) return 'High Overlap';
   if (score >= 30) return 'Moderate';
@@ -66,54 +57,134 @@ const HEALTH_METRICS = [
   { label: 'Overlap Risk', score: 45, color: '#FF9F43' },
 ];
 
-const ETF_COLORS: Record<string, string> = {
-  SCHD: '#338DFF', VTI: '#00C896', QQQM: '#FF9F43',
-  JEPI: '#A78BFA', JEPQ: '#FF5A5F', SPY: '#66AFFF',
-  VOO: '#004F98', VXUS: '#FFD93D', QQQI: '#E879F9',
-};
+// ── Sparkline ────────────────────────────────────────────────
+function Sparkline({ color = '#00C896', width = 120, height = 36 }: { color?: string; width?: number; height?: number }) {
+  const points = [0, 4, 2, 8, 5, 10, 7, 14, 11, 16, 13, 18, 15, 20, 18, 24, 20, 28, 22, 26, 25, 30, 28, 34, 30, 36];
+  const max = Math.max(...points.filter((_, i) => i % 2 === 1));
+  const coords = points.reduce((acc, val, i) => {
+    if (i % 2 === 0) return acc;
+    const x = (points[i - 1] / 30) * width;
+    const y = height - (val / max) * (height - 4) - 2;
+    return acc + `${x},${y} `;
+  }, '');
+  return (
+    <Svg width={width} height={height}>
+      <Polyline points={coords.trim()} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
 
+// ── Donut Chart ──────────────────────────────────────────────
+function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; totalValue: number }) {
+  const SIZE = 160;
+  const cx = SIZE / 2;
+  const cy = SIZE / 2;
+  const STROKE = 22;
+  const R = (SIZE - STROKE) / 2;
+  const CIRCUMFERENCE = 2 * Math.PI * R;
+  const GAP = 3;
+
+  const hasValues = totalValue > 0;
+  const items = hasValues
+    ? positions.filter(p => p.value > 0)
+    : positions;
+
+  const slices: { color: string; ticker: string; pct: number; dash: number; offset: number }[] = [];
+  let cumulative = 0;
+
+  items.forEach((p) => {
+    const pct = hasValues ? p.value / totalValue : 1 / items.length;
+    const dash = Math.max(pct * CIRCUMFERENCE - GAP, 0);
+    const offset = CIRCUMFERENCE * 0.25 - cumulative * CIRCUMFERENCE;
+    slices.push({ color: p.color, ticker: p.ticker, pct: Math.round(pct * 100), dash, offset });
+    cumulative += pct;
+  });
+
+  return (
+    <View style={dStyles.row}>
+      {/* Chart */}
+      <View style={dStyles.chartWrap}>
+        <Svg width={SIZE} height={SIZE}>
+          <G>
+            {slices.map((sl) => (
+              <Circle
+                key={sl.ticker}
+                cx={cx} cy={cy} r={R}
+                fill="none"
+                stroke={sl.color}
+                strokeWidth={STROKE}
+                strokeDasharray={`${sl.dash} ${CIRCUMFERENCE - sl.dash}`}
+                strokeDashoffset={sl.offset}
+                strokeLinecap="butt"
+              />
+            ))}
+          </G>
+        </Svg>
+        <View style={dStyles.center}>
+          <Text style={dStyles.centerLabel}>Total</Text>
+          <Text style={dStyles.centerValue}>
+            {hasValues
+              ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : '—'}
+          </Text>
+        </View>
+      </View>
+
+      {/* Legend */}
+      <View style={dStyles.legend}>
+        {slices.map((sl) => (
+          <View key={sl.ticker} style={dStyles.legendItem}>
+            <View style={[dStyles.legendDot, { backgroundColor: sl.color }]} />
+            <View>
+              <Text style={dStyles.legendTicker}>{sl.ticker}</Text>
+              <Text style={dStyles.legendPct}>{sl.pct}%</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const dStyles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  chartWrap: { width: 160, height: 160, position: 'relative' },
+  center: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+  centerLabel: { fontSize: 11, color: '#4A6080', marginBottom: 2 },
+  centerValue: { fontSize: 13, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'], textAlign: 'center' },
+  legend: { flex: 1, paddingLeft: 16, gap: 10 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendTicker: { fontSize: 12, fontWeight: '600', color: '#E8EEF8' },
+  legendPct: { fontSize: 10, color: '#4A6080' },
+});
+
+// ── Main ─────────────────────────────────────────────────────
 export default function PortfolioScreen() {
-  const [myETFs, setMyETFs] = useState<string[]>(['SCHD', 'VTI', 'QQQM', 'JEPI']);
-  const [liveETFs, setLiveETFs] = useState<LiveETF[]>([]);
+  const { positions, loading, totalValue, totalChange, hasValues, refresh } = usePortfolioData();
+  const [refreshing, setRefreshing] = useState(false);
   const [holdingsMap, setHoldingsMap] = useState<HoldingsMap>({});
   const [loadingOverlap, setLoadingOverlap] = useState(false);
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
+  const [period, setPeriod] = useState<'Annual' | 'Monthly'>('Annual');
 
-  useEffect(() => {
-    AsyncStorage.getItem('userETFs').then(async (val) => {
-      const tickers: string[] = val ? JSON.parse(val) : ['SCHD', 'VTI', 'QQQM', 'JEPI'];
-      if (tickers.length > 0) setMyETFs(tickers);
+  const myETFs = positions.map(p => p.ticker);
 
-      const holdingsRaw = await AsyncStorage.getItem('userHoldings');
-      const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-
-      const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
-      const data: LiveETF[] = tickers.map((ticker, i) => {
-        const p = prices[i];
-        const qty = parseFloat(holdingsData[ticker]?.qty || '0');
-        return {
-          ticker,
-          price: p?.price ?? 0,
-          change: p?.change ?? 0,
-          pct: p?.changesPercentage ?? 0,
-          value: qty > 0 ? qty * (p?.price ?? 0) : 0,
-        };
-      });
-      setLiveETFs(data);
-    });
-  }, []);
+  async function onRefresh() {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  }
 
   const loadOverlap = async () => {
     if (Object.keys(holdingsMap).length > 0) return;
     setLoadingOverlap(true);
     const results: HoldingsMap = {};
-    await Promise.all(
-      myETFs.map(async (ticker) => {
-        const h = await getETFTopHoldings(ticker);
-        if (h.length) results[ticker] = h;
-      })
-    );
+    await Promise.all(myETFs.map(async (ticker) => {
+      const h = await getETFTopHoldings(ticker);
+      if (h.length) results[ticker] = h;
+    }));
     setHoldingsMap(results);
     setLoadingOverlap(false);
   };
@@ -125,21 +196,12 @@ export default function PortfolioScreen() {
   }
 
   const etfs = Object.keys(holdingsMap);
-  const pairs: {
-    etf1: string; etf2: string; score: number;
-    sharedCount: number;
-    sharedHoldings: { symbol: string; name: string; w1: number; w2: number }[];
-  }[] = [];
+  const pairs: { etf1: string; etf2: string; score: number; sharedCount: number; sharedHoldings: { symbol: string; name: string; w1: number; w2: number }[] }[] = [];
   for (let i = 0; i < etfs.length; i++) {
     for (let j = i + 1; j < etfs.length; j++) {
       const e1 = etfs[i], e2 = etfs[j];
       const shared = computeShared(holdingsMap[e1], holdingsMap[e2]);
-      pairs.push({
-        etf1: e1, etf2: e2,
-        score: overlapScore(holdingsMap[e1], holdingsMap[e2]),
-        sharedCount: shared.length,
-        sharedHoldings: shared,
-      });
+      pairs.push({ etf1: e1, etf2: e2, score: overlapScore(holdingsMap[e1], holdingsMap[e2]), sharedCount: shared.length, sharedHoldings: shared });
     }
   }
   pairs.sort((a, b) => b.score - a.score);
@@ -149,121 +211,104 @@ export default function PortfolioScreen() {
     holdingsMap[ticker]?.forEach((h) => {
       if (!h.symbol) return;
       const ex = allSymbols.get(h.symbol);
-      if (ex) ex.etfs.push(ticker);
-      else allSymbols.set(h.symbol, { name: h.name, etfs: [ticker] });
+      if (ex) ex.etfs.push(ticker); else allSymbols.set(h.symbol, { name: h.name, etfs: [ticker] });
     });
   });
-  const overlappingHoldings = Array.from(allSymbols.entries())
-    .filter(([, v]) => v.etfs.length > 1)
-    .sort((a, b) => b[1].etfs.length - a[1].etfs.length)
-    .slice(0, 8);
+  const overlappingHoldings = Array.from(allSymbols.entries()).filter(([, v]) => v.etfs.length > 1).sort((a, b) => b[1].etfs.length - a[1].etfs.length).slice(0, 8);
+  const overallHealth = Math.round(HEALTH_METRICS.reduce((a, m) => a + m.score, 0) / HEALTH_METRICS.length);
 
-  const overallHealth = Math.round(
-    HEALTH_METRICS.reduce((a, m) => a + m.score, 0) / HEALTH_METRICS.length
-  );
-
-  const totalValue = liveETFs.reduce((sum, e) => sum + e.value, 0);
-  const totalChange = liveETFs.reduce((sum, e) => sum + e.change, 0);
+  // Income (real dividend yields × position values)
+  const YIELDS: Record<string, number> = { SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819, JEPQ: 0.0950, SPY: 0.0128, VOO: 0.0128, VXUS: 0.0280, QQQI: 0.0120 };
+  const annualIncome = positions.reduce((sum, p) => sum + p.value * (YIELDS[p.ticker] || 0.02), 0);
+  const monthlyIncome = annualIncome / 12;
 
   return (
     <View style={s.container}>
       <StatusBar barStyle="light-content" />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>
-
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={s.scroll}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#338DFF" colors={['#338DFF']} />}
+      >
         {/* Header */}
         <View style={s.header}>
           <Text style={s.headerTitle}>Portfolio</Text>
-          <View style={s.premiumBadge}>
-            <Ionicons name="star" size={10} color="#FFD93D" />
-            <Text style={s.premiumText}>Premium</Text>
-          </View>
+          <TouchableOpacity style={s.periodToggle} onPress={() => setPeriod(p => p === 'Annual' ? 'Monthly' : 'Annual')}>
+            <Text style={s.periodText}>{period}</Text>
+            <Ionicons name="chevron-down" size={12} color="#C8D8F0" />
+          </TouchableOpacity>
         </View>
 
-        {/* Hero */}
-        <View style={s.heroCard}>
-          <Text style={s.heroLabel}>TOTAL PORTFOLIO VALUE</Text>
-          <Text style={s.heroValue}>
-            {totalValue > 0
-              ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : '—'}
-          </Text>
-          {totalValue > 0 ? (
-            <View style={s.heroRow}>
-              <Ionicons name={totalChange >= 0 ? 'arrow-up' : 'arrow-down'} size={12} color={totalChange >= 0 ? '#00C896' : '#FF5A5F'} />
-              <Text style={[s.heroChange, { color: totalChange >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                {totalChange >= 0 ? '+' : ''}${Math.abs(totalChange).toFixed(2)} Today
-              </Text>
-            </View>
+        {/* Allocation Card */}
+        <View style={s.allocationCard}>
+          <Text style={s.cardSectionTitle}>Allocation</Text>
+          {loading ? (
+            <ActivityIndicator color="#338DFF" style={{ marginVertical: 40 }} />
           ) : (
-            <Text style={s.heroHint}>Add quantities in Setup to see your total value</Text>
+            <DonutChart positions={positions} totalValue={totalValue} />
           )}
-          <View style={s.heroStats}>
-            <View style={s.heroStat}>
-              <Text style={s.heroStatLabel}>Total Return (1Y)</Text>
-              <Text style={[s.heroStatValue, { color: '#00C896' }]}>—</Text>
-            </View>
-            <View style={s.heroStatDivider} />
-            <View style={s.heroStat}>
-              <Text style={s.heroStatLabel}>Est. Annual Income</Text>
-              <Text style={s.heroStatValue}>—</Text>
-            </View>
-          </View>
         </View>
 
-        {/* ETF List */}
-        <View style={s.section}>
-          <View style={s.sectionRow}>
-            <Text style={s.sectionTitle}>YOUR ETFs</Text>
-            <TouchableOpacity><Text style={s.viewAll}>View All</Text></TouchableOpacity>
-          </View>
-          {(liveETFs.length > 0 ? liveETFs : myETFs.map(t => ({ ticker: t, price: 0, change: 0, pct: 0, value: 0 }))).map((etf) => (
-            <View key={etf.ticker} style={s.etfRow}>
-              <View style={[s.etfDot, { backgroundColor: ETF_COLORS[etf.ticker] || '#338DFF' }]} />
-              <Text style={s.etfTicker}>{etf.ticker}</Text>
-              <View style={s.etfMid}>
-                <Text style={s.etfPrice}>{etf.price > 0 ? `$${etf.price.toFixed(2)}` : '—'}</Text>
-                {etf.value > 0 && (
-                  <Text style={s.etfHolding}>${etf.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
-                )}
-              </View>
-              <Text style={[s.etfChange, { color: etf.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                {etf.pct >= 0 ? '+' : ''}{etf.pct.toFixed(2)}%
+        {/* Income Card */}
+        <View style={s.incomeCard}>
+          <Text style={s.cardSectionTitle}>Income</Text>
+          <View style={s.incomeRow}>
+            <View style={s.incomeStat}>
+              <Text style={s.incomeLabel}>Monthly</Text>
+              <Text style={s.incomeValue}>
+                {monthlyIncome > 0 ? `$${monthlyIncome.toFixed(2)}` : '—'}
               </Text>
             </View>
-          ))}
+            <View style={s.incomeStatDivider} />
+            <View style={s.incomeStat}>
+              <Text style={s.incomeLabel}>Annual</Text>
+              <Text style={s.incomeValue}>
+                {annualIncome > 0 ? `$${annualIncome.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+              </Text>
+            </View>
+          </View>
         </View>
 
-        {/* Allocation */}
+        {/* Performance Card */}
+        <View style={s.performanceCard}>
+          <Text style={s.cardSectionTitle}>Performance (1Y)</Text>
+          <View style={s.perfRow}>
+            <View>
+              <Text style={s.perfValue}>
+                {hasValues
+                  ? `${totalChange >= 0 ? '+' : ''}${((totalChange / totalValue) * 100).toFixed(2)}%`
+                  : '—'}
+              </Text>
+            </View>
+            <Sparkline color="#00C896" width={140} height={40} />
+          </View>
+        </View>
+
+        {/* YOUR ETFs */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>ALLOCATION</Text>
-          {(liveETFs.length > 0 ? liveETFs : myETFs.map((t, i) => ({
-            ticker: t, pct: Math.round(100 / myETFs.length),
-            color: ETF_COLORS[t] || '#338DFF',
-          }))).map((item, i) => {
-            const total = liveETFs.reduce((sum, e) => sum + e.value, 0);
-            const pct = total > 0
-              ? Math.round(((liveETFs[i]?.value || 0) / total) * 100)
-              : Math.round(100 / myETFs.length);
-            return (
-              <View key={item.ticker} style={s.allocRow}>
-                <Text style={s.allocTicker}>{item.ticker}</Text>
-                <View style={s.allocBarBg}>
-                  <View style={[s.allocBarFill, {
-                    width: `${pct}%` as any,
-                    backgroundColor: ETF_COLORS[item.ticker] || '#338DFF'
-                  }]} />
+          <Text style={s.sectionTitle}>YOUR ETFs</Text>
+          <View style={s.etfCard}>
+            {positions.map((etf) => (
+              <View key={etf.ticker} style={s.etfRow}>
+                <View style={[s.etfDot, { backgroundColor: etf.color }]} />
+                <Text style={s.etfTicker}>{etf.ticker}</Text>
+                <View style={s.etfMid}>
+                  <Text style={s.etfPrice}>{etf.price > 0 ? `$${etf.price.toFixed(2)}` : '—'}</Text>
+                  {etf.value > 0 && <Text style={s.etfHolding}>${etf.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>}
                 </View>
-                <Text style={s.allocPct}>{pct}%</Text>
+                <Text style={[s.etfChange, { color: etf.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                  {etf.pct >= 0 ? '+' : ''}{etf.pct.toFixed(2)}%
+                </Text>
               </View>
-            );
-          })}
+            ))}
+          </View>
         </View>
 
-        {/* ── ANALYTICS ── */}
+        {/* ANALYTICS */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ANALYTICS</Text>
 
-          {/* ① Overlap Analyzer */}
+          {/* ① Overlap */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('overlap')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#338DFF22' }]}>
@@ -278,30 +323,19 @@ export default function PortfolioScreen() {
               </View>
               <Ionicons name={expandedCard === 'overlap' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
-
             {expandedCard === 'overlap' && (
               <View style={s.expanded}>
                 {loadingOverlap ? (
-                  <View style={s.loadingRow}>
-                    <ActivityIndicator size="small" color="#338DFF" />
-                    <Text style={s.loadingText}>Fetching holdings from Yahoo Finance…</Text>
-                  </View>
+                  <View style={s.loadingRow}><ActivityIndicator size="small" color="#338DFF" /><Text style={s.loadingText}>Fetching holdings…</Text></View>
                 ) : pairs.length === 0 ? (
-                  <Text style={s.emptyText}>Could not load holdings. Check your connection and try again.</Text>
+                  <Text style={s.emptyText}>Could not load holdings. Check your connection.</Text>
                 ) : (
                   <>
                     {pairs.map((pair) => {
                       const pairKey = pair.etf1 + pair.etf2;
                       return (
                         <View key={pairKey} style={s.pairBlock}>
-                          <TouchableOpacity
-                            style={s.pairHeader}
-                            onPress={() => {
-                              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                              setExpandedPair(expandedPair === pairKey ? null : pairKey);
-                            }}
-                            activeOpacity={0.75}
-                          >
+                          <TouchableOpacity style={s.pairHeader} onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setExpandedPair(expandedPair === pairKey ? null : pairKey); }} activeOpacity={0.75}>
                             <View style={s.pairLeft}>
                               <View style={s.chip}><Text style={s.chipText}>{pair.etf1}</Text></View>
                               <Ionicons name="git-merge-outline" size={12} color="#4A6080" style={{ marginHorizontal: 4 }} />
@@ -312,11 +346,8 @@ export default function PortfolioScreen() {
                               <Text style={[s.pairLabel, { color: scoreColor(pair.score) }]}>{scoreLabel(pair.score)}</Text>
                             </View>
                           </TouchableOpacity>
-                          <View style={s.barBg}>
-                            <View style={[s.barFill, { width: `${pair.score}%` as any, backgroundColor: scoreColor(pair.score) }]} />
-                          </View>
+                          <View style={s.barBg}><View style={[s.barFill, { width: `${pair.score}%` as any, backgroundColor: scoreColor(pair.score) }]} /></View>
                           <Text style={s.sharedCount}>{pair.sharedCount} shared holdings · tap to expand</Text>
-
                           {expandedPair === pairKey && (
                             <View style={s.table}>
                               <View style={s.tableHead}>
@@ -326,10 +357,7 @@ export default function PortfolioScreen() {
                               </View>
                               {pair.sharedHoldings.map((h) => (
                                 <View key={h.symbol} style={s.tableRow}>
-                                  <View style={{ flex: 2 }}>
-                                    <Text style={s.tableSymbol}>{h.symbol}</Text>
-                                    <Text style={s.tableName} numberOfLines={1}>{h.name}</Text>
-                                  </View>
+                                  <View style={{ flex: 2 }}><Text style={s.tableSymbol}>{h.symbol}</Text><Text style={s.tableName} numberOfLines={1}>{h.name}</Text></View>
                                   <Text style={s.tableWeight}>{h.w1.toFixed(1)}%</Text>
                                   <Text style={s.tableWeight}>{h.w2.toFixed(1)}%</Text>
                                 </View>
@@ -339,34 +367,23 @@ export default function PortfolioScreen() {
                         </View>
                       );
                     })}
-
                     {overlappingHoldings.length > 0 && (
                       <View style={{ marginTop: 8 }}>
                         <Text style={[s.sectionTitle, { marginBottom: 8 }]}>IN MULTIPLE ETFs</Text>
                         {overlappingHoldings.map(([symbol, info]) => (
                           <View key={symbol} style={s.overlapRow}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={s.overlapSymbol}>{symbol}</Text>
-                              <Text style={s.overlapName} numberOfLines={1}>{info.name}</Text>
-                            </View>
-                            <View style={s.chips}>
-                              {info.etfs.map((e) => (
-                                <View key={e} style={s.miniChip}><Text style={s.miniChipText}>{e}</Text></View>
-                              ))}
-                            </View>
+                            <View style={{ flex: 1 }}><Text style={s.overlapSymbol}>{symbol}</Text><Text style={s.overlapName} numberOfLines={1}>{info.name}</Text></View>
+                            <View style={s.chips}>{info.etfs.map((e) => (<View key={e} style={s.miniChip}><Text style={s.miniChipText}>{e}</Text></View>))}</View>
                           </View>
                         ))}
                       </View>
                     )}
-
                     {pairs[0] && (
                       <View style={s.insight}>
                         <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
                         <Text style={s.insightText}>
-                          {pairs[0].score >= 60
-                            ? `${pairs[0].etf1} & ${pairs[0].etf2} have high overlap (${pairs[0].score}). Consider whether you need both.`
-                            : pairs[0].score >= 30
-                            ? `Moderate overlap between ${pairs[0].etf1} & ${pairs[0].etf2} (${pairs[0].score}). Reasonable diversification overall.`
+                          {pairs[0].score >= 60 ? `${pairs[0].etf1} & ${pairs[0].etf2} have high overlap (${pairs[0].score}). Consider whether you need both.`
+                            : pairs[0].score >= 30 ? `Moderate overlap between ${pairs[0].etf1} & ${pairs[0].etf2} (${pairs[0].score}). Reasonable diversification overall.`
                             : `Great diversification! All ETF pairs show low overlap.`}
                         </Text>
                       </View>
@@ -377,122 +394,79 @@ export default function PortfolioScreen() {
             )}
           </View>
 
-          {/* ② Sector Exposure */}
+          {/* ② Sector */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('sector')} activeOpacity={0.75}>
-              <View style={[s.cardIcon, { backgroundColor: '#00C89622' }]}>
-                <Ionicons name="pie-chart-outline" size={22} color="#00C896" />
-              </View>
-              <View style={s.cardText}>
-                <Text style={s.cardTitle}>Sector Exposure</Text>
-                <Text style={s.cardSub}>Breakdown by sector across your entire portfolio</Text>
-              </View>
+              <View style={[s.cardIcon, { backgroundColor: '#00C89622' }]}><Ionicons name="pie-chart-outline" size={22} color="#00C896" /></View>
+              <View style={s.cardText}><Text style={s.cardTitle}>Sector Exposure</Text><Text style={s.cardSub}>Breakdown by sector across your entire portfolio</Text></View>
               <Ionicons name={expandedCard === 'sector' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
-
             {expandedCard === 'sector' && (
               <View style={s.expanded}>
                 {SECTOR_DATA.map((sec) => (
                   <View key={sec.name} style={s.sectorRow}>
                     <View style={[s.sectorDot, { backgroundColor: sec.color }]} />
                     <Text style={s.sectorName}>{sec.name}</Text>
-                    <View style={s.barBg}>
-                      <View style={[s.barFill, { width: `${(sec.pct / 30) * 100}%` as any, backgroundColor: sec.color }]} />
-                    </View>
+                    <View style={s.barBg}><View style={[s.barFill, { width: `${(sec.pct / 30) * 100}%` as any, backgroundColor: sec.color }]} /></View>
                     <Text style={s.sectorPct}>{sec.pct}%</Text>
                   </View>
                 ))}
-                <View style={s.insight}>
-                  <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
-                  <Text style={s.insightText}>Technology is your largest sector at 28.4%. Consider if you're comfortable with this concentration.</Text>
-                </View>
+                <View style={s.insight}><Ionicons name="bulb-outline" size={14} color="#FF9F43" /><Text style={s.insightText}>Technology is your largest sector at 28.4%.</Text></View>
               </View>
             )}
           </View>
 
-          {/* ③ Portfolio Health Score */}
+          {/* ③ Health */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('health')} activeOpacity={0.75}>
-              <View style={[s.cardIcon, { backgroundColor: '#FF9F4322' }]}>
-                <Ionicons name="fitness-outline" size={22} color="#FF9F43" />
-              </View>
-              <View style={s.cardText}>
-                <Text style={s.cardTitle}>Portfolio Health Score</Text>
-                <Text style={s.cardSub}>Diversification, risk, and concentration rating</Text>
-              </View>
-              <View style={s.healthPill}>
-                <Text style={[s.healthPillText, { color: overallHealth >= 70 ? '#00C896' : '#FF9F43' }]}>{overallHealth}</Text>
-              </View>
+              <View style={[s.cardIcon, { backgroundColor: '#FF9F4322' }]}><Ionicons name="fitness-outline" size={22} color="#FF9F43" /></View>
+              <View style={s.cardText}><Text style={s.cardTitle}>Portfolio Health Score</Text><Text style={s.cardSub}>Diversification, risk, and concentration rating</Text></View>
+              <View style={s.healthPill}><Text style={[s.healthPillText, { color: overallHealth >= 70 ? '#00C896' : '#FF9F43' }]}>{overallHealth}</Text></View>
               <Ionicons name={expandedCard === 'health' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
-
             {expandedCard === 'health' && (
               <View style={s.expanded}>
                 {HEALTH_METRICS.map((m) => (
                   <View key={m.label} style={s.healthRow}>
                     <Text style={s.healthLabel}>{m.label}</Text>
-                    <View style={s.barBg}>
-                      <View style={[s.barFill, { width: `${m.score}%` as any, backgroundColor: m.color }]} />
-                    </View>
+                    <View style={s.barBg}><View style={[s.barFill, { width: `${m.score}%` as any, backgroundColor: m.color }]} /></View>
                     <Text style={[s.healthScore, { color: m.color }]}>{m.score}</Text>
                   </View>
                 ))}
-                <View style={s.insight}>
-                  <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
-                  <Text style={s.insightText}>Your portfolio scores well on diversification but has moderate concentration risk. Overall health is solid.</Text>
-                </View>
+                <View style={s.insight}><Ionicons name="bulb-outline" size={14} color="#FF9F43" /><Text style={s.insightText}>Your portfolio scores well on diversification but has moderate concentration risk.</Text></View>
               </View>
             )}
           </View>
 
-          {/* ④ Dividend Forecast */}
+          {/* ④ Dividend */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('dividend')} activeOpacity={0.75}>
-              <View style={[s.cardIcon, { backgroundColor: '#A78BFA22' }]}>
-                <Ionicons name="trending-up-outline" size={22} color="#A78BFA" />
-              </View>
-              <View style={s.cardText}>
-                <Text style={s.cardTitle}>Dividend Forecast</Text>
-                <Text style={s.cardSub}>Projected income over the next 12 months</Text>
-              </View>
+              <View style={[s.cardIcon, { backgroundColor: '#A78BFA22' }]}><Ionicons name="trending-up-outline" size={22} color="#A78BFA" /></View>
+              <View style={s.cardText}><Text style={s.cardTitle}>Dividend Forecast</Text><Text style={s.cardSub}>Projected income over the next 12 months</Text></View>
               <Ionicons name={expandedCard === 'dividend' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
-
             {expandedCard === 'dividend' && (
               <View style={s.expanded}>
                 <View style={s.divSummary}>
-                  <View style={s.divStat}>
-                    <Text style={s.divStatLabel}>Monthly</Text>
-                    <Text style={s.divStatValue}>$478.52</Text>
-                  </View>
+                  <View style={s.divStat}><Text style={s.divStatLabel}>Monthly</Text><Text style={s.divStatValue}>{monthlyIncome > 0 ? `$${monthlyIncome.toFixed(2)}` : '—'}</Text></View>
                   <View style={s.divDivider} />
-                  <View style={s.divStat}>
-                    <Text style={s.divStatLabel}>Annual</Text>
-                    <Text style={s.divStatValue}>$5,742.20</Text>
-                  </View>
+                  <View style={s.divStat}><Text style={s.divStatLabel}>Annual</Text><Text style={s.divStatValue}>{annualIncome > 0 ? `$${annualIncome.toFixed(2)}` : '—'}</Text></View>
                   <View style={s.divDivider} />
-                  <View style={s.divStat}>
-                    <Text style={s.divStatLabel}>Yield</Text>
-                    <Text style={[s.divStatValue, { color: '#00C896' }]}>4.61%</Text>
-                  </View>
+                  <View style={s.divStat}><Text style={s.divStatLabel}>Yield</Text><Text style={[s.divStatValue, { color: '#00C896' }]}>{totalValue > 0 ? `${((annualIncome / totalValue) * 100).toFixed(2)}%` : '—'}</Text></View>
                 </View>
-                {[
-                  { ticker: 'SCHD', annual: '$2,820', yield: '3.65%', freq: 'Quarterly' },
-                  { ticker: 'JEPI', annual: '$1,448', yield: '8.19%', freq: 'Monthly' },
-                  { ticker: 'VTI', annual: '$964', yield: '1.52%', freq: 'Quarterly' },
-                  { ticker: 'QQQM', annual: '$510', yield: '0.64%', freq: 'Quarterly' },
-                ].map((d) => (
-                  <View key={d.ticker} style={s.divRow}>
-                    <Text style={s.divTicker}>{d.ticker}</Text>
-                    <Text style={s.divAnnual}>{d.annual}/yr</Text>
-                    <Text style={s.divYield}>{d.yield}</Text>
-                    <Text style={s.divFreq}>{d.freq}</Text>
-                  </View>
-                ))}
-                <View style={s.insight}>
-                  <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
-                  <Text style={s.insightText}>JEPI contributes the most dividend income despite being your smallest position. Great yield-per-dollar efficiency.</Text>
-                </View>
+                {positions.map((p) => {
+                  const yld = YIELDS[p.ticker] || 0.02;
+                  const ann = p.value * yld;
+                  return (
+                    <View key={p.ticker} style={s.divRow}>
+                      <Text style={s.divTicker}>{p.ticker}</Text>
+                      <Text style={s.divAnnual}>{ann > 0 ? `$${ann.toFixed(0)}/yr` : '—'}</Text>
+                      <Text style={s.divYield}>{(yld * 100).toFixed(2)}%</Text>
+                      <Text style={s.divFreq}>{['JEPI', 'JEPQ'].includes(p.ticker) ? 'Monthly' : 'Quarterly'}</Text>
+                    </View>
+                  );
+                })}
+                <View style={s.insight}><Ionicons name="bulb-outline" size={14} color="#FF9F43" /><Text style={s.insightText}>Income calculated using current dividend yields × your position values.</Text></View>
               </View>
             )}
           </View>
@@ -508,35 +482,29 @@ const s = StyleSheet.create({
   scroll: { paddingBottom: 100 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16 },
   headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
-  premiumBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFD93D22', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
-  premiumText: { fontSize: 11, fontWeight: '700', color: '#FFD93D' },
-  heroCard: { marginHorizontal: 20, marginBottom: 24, backgroundColor: '#141A26', borderRadius: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', padding: 20 },
-  heroLabel: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 6 },
-  heroValue: { fontSize: 34, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'], marginBottom: 6 },
-  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16 },
-  heroChange: { fontSize: 13, fontWeight: '600' },
-  heroHint: { fontSize: 12, color: '#4A6080', fontStyle: 'italic', marginBottom: 16 },
-  heroStats: { flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)', paddingTop: 14 },
-  heroStat: { flex: 1, alignItems: 'center' },
-  heroStatLabel: { fontSize: 10, color: '#4A6080', marginBottom: 4 },
-  heroStatValue: { fontSize: 14, fontWeight: '600', color: '#E8EEF8' },
-  heroStatDivider: { width: 0.5, backgroundColor: 'rgba(255,255,255,0.06)' },
+  periodToggle: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#1E2A3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  periodText: { fontSize: 13, color: '#C8D8F0', fontWeight: '500' },
+  allocationCard: { marginHorizontal: 20, marginBottom: 12, backgroundColor: '#141A26', borderRadius: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', padding: 20 },
+  incomeCard: { marginHorizontal: 20, marginBottom: 12, backgroundColor: '#141A26', borderRadius: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', padding: 20 },
+  performanceCard: { marginHorizontal: 20, marginBottom: 24, backgroundColor: '#141A26', borderRadius: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', padding: 20 },
+  cardSectionTitle: { fontSize: 13, fontWeight: '600', color: '#C8D8F0', marginBottom: 16 },
+  incomeRow: { flexDirection: 'row' },
+  incomeStat: { flex: 1, alignItems: 'center' },
+  incomeLabel: { fontSize: 11, color: '#4A6080', marginBottom: 6 },
+  incomeValue: { fontSize: 22, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'] },
+  incomeStatDivider: { width: 0.5, backgroundColor: 'rgba(255,255,255,0.06)' },
+  perfRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  perfValue: { fontSize: 28, fontWeight: '700', color: '#00C896' },
   section: { paddingHorizontal: 20, marginBottom: 24 },
-  sectionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sectionTitle: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 12 },
-  viewAll: { fontSize: 12, color: '#338DFF' },
-  etfRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)', gap: 8 },
+  etfCard: { backgroundColor: '#141A26', borderRadius: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 16, overflow: 'hidden' },
+  etfRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)', gap: 8 },
   etfDot: { width: 6, height: 6, borderRadius: 3 },
   etfTicker: { width: 48, fontSize: 14, fontWeight: '700', color: '#E8EEF8' },
   etfMid: { flex: 1 },
   etfPrice: { fontSize: 14, color: '#C8D8F0', fontVariant: ['tabular-nums'] },
   etfHolding: { fontSize: 11, color: '#4A6080', fontVariant: ['tabular-nums'] },
   etfChange: { fontSize: 13, fontWeight: '600', width: 64, textAlign: 'right' },
-  allocRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  allocTicker: { width: 44, fontSize: 12, color: '#C8D8F0', fontWeight: '600' },
-  allocBarBg: { flex: 1, height: 6, backgroundColor: '#1E2A3A', borderRadius: 3, overflow: 'hidden', marginHorizontal: 10 },
-  allocBarFill: { height: '100%', borderRadius: 3 },
-  allocPct: { width: 32, fontSize: 12, color: '#4A6080', textAlign: 'right' },
   card: { backgroundColor: '#141A26', borderRadius: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 10, overflow: 'hidden' },
   cardHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
   cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
