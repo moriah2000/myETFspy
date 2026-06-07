@@ -13,7 +13,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
-import { getETFTopHoldings } from '../services/api';
+import { getETFPrice, getETFTopHoldings } from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -21,6 +21,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 type Holding = { symbol: string; name: string; weight: number };
 type HoldingsMap = Record<string, Holding[]>;
+type LiveETF = { ticker: string; price: number; change: number; pct: number; value: number };
 
 function computeShared(h1: Holding[], h2: Holding[]) {
   const map2 = new Map(h2.map((h) => [h.symbol, h]));
@@ -65,19 +66,41 @@ const HEALTH_METRICS = [
   { label: 'Overlap Risk', score: 45, color: '#FF9F43' },
 ];
 
+const ETF_COLORS: Record<string, string> = {
+  SCHD: '#338DFF', VTI: '#00C896', QQQM: '#FF9F43',
+  JEPI: '#A78BFA', JEPQ: '#FF5A5F', SPY: '#66AFFF',
+  VOO: '#004F98', VXUS: '#FFD93D', QQQI: '#E879F9',
+};
+
 export default function PortfolioScreen() {
   const [myETFs, setMyETFs] = useState<string[]>(['SCHD', 'VTI', 'QQQM', 'JEPI']);
+  const [liveETFs, setLiveETFs] = useState<LiveETF[]>([]);
   const [holdingsMap, setHoldingsMap] = useState<HoldingsMap>({});
   const [loadingOverlap, setLoadingOverlap] = useState(false);
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem('userETFs').then((val) => {
-      if (val) {
-        const parsed = JSON.parse(val);
-        if (parsed.length > 0) setMyETFs(parsed);
-      }
+    AsyncStorage.getItem('userETFs').then(async (val) => {
+      const tickers: string[] = val ? JSON.parse(val) : ['SCHD', 'VTI', 'QQQM', 'JEPI'];
+      if (tickers.length > 0) setMyETFs(tickers);
+
+      const holdingsRaw = await AsyncStorage.getItem('userHoldings');
+      const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
+
+      const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
+      const data: LiveETF[] = tickers.map((ticker, i) => {
+        const p = prices[i];
+        const qty = parseFloat(holdingsData[ticker]?.qty || '0');
+        return {
+          ticker,
+          price: p?.price ?? 0,
+          change: p?.change ?? 0,
+          pct: p?.changesPercentage ?? 0,
+          value: qty > 0 ? qty * (p?.price ?? 0) : 0,
+        };
+      });
+      setLiveETFs(data);
     });
   }, []);
 
@@ -139,6 +162,9 @@ export default function PortfolioScreen() {
     HEALTH_METRICS.reduce((a, m) => a + m.score, 0) / HEALTH_METRICS.length
   );
 
+  const totalValue = liveETFs.reduce((sum, e) => sum + e.value, 0);
+  const totalChange = liveETFs.reduce((sum, e) => sum + e.change, 0);
+
   return (
     <View style={s.container}>
       <StatusBar barStyle="light-content" />
@@ -156,20 +182,30 @@ export default function PortfolioScreen() {
         {/* Hero */}
         <View style={s.heroCard}>
           <Text style={s.heroLabel}>TOTAL PORTFOLIO VALUE</Text>
-          <Text style={s.heroValue}>$124,560.78</Text>
-          <View style={s.heroRow}>
-            <Ionicons name="arrow-up" size={12} color="#00C896" />
-            <Text style={s.heroChange}>+2.48% Today</Text>
-          </View>
+          <Text style={s.heroValue}>
+            {totalValue > 0
+              ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : '—'}
+          </Text>
+          {totalValue > 0 ? (
+            <View style={s.heroRow}>
+              <Ionicons name={totalChange >= 0 ? 'arrow-up' : 'arrow-down'} size={12} color={totalChange >= 0 ? '#00C896' : '#FF5A5F'} />
+              <Text style={[s.heroChange, { color: totalChange >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                {totalChange >= 0 ? '+' : ''}${Math.abs(totalChange).toFixed(2)} Today
+              </Text>
+            </View>
+          ) : (
+            <Text style={s.heroHint}>Add quantities in Setup to see your total value</Text>
+          )}
           <View style={s.heroStats}>
             <View style={s.heroStat}>
               <Text style={s.heroStatLabel}>Total Return (1Y)</Text>
-              <Text style={[s.heroStatValue, { color: '#00C896' }]}>+12.45%</Text>
+              <Text style={[s.heroStatValue, { color: '#00C896' }]}>—</Text>
             </View>
             <View style={s.heroStatDivider} />
             <View style={s.heroStat}>
               <Text style={s.heroStatLabel}>Est. Annual Income</Text>
-              <Text style={s.heroStatValue}>$5,742.20</Text>
+              <Text style={s.heroStatValue}>—</Text>
             </View>
           </View>
         </View>
@@ -180,17 +216,19 @@ export default function PortfolioScreen() {
             <Text style={s.sectionTitle}>YOUR ETFs</Text>
             <TouchableOpacity><Text style={s.viewAll}>View All</Text></TouchableOpacity>
           </View>
-          {[
-            { ticker: 'SCHD', value: '$78.93', change: '+1.32%', up: true },
-            { ticker: 'QQQM', value: '$186.45', change: '+1.06%', up: true },
-            { ticker: 'VTI', value: '$240.18', change: '+0.87%', up: true },
-            { ticker: 'JEPI', value: '$57.81', change: '+0.45%', up: true },
-          ].map((etf) => (
+          {(liveETFs.length > 0 ? liveETFs : myETFs.map(t => ({ ticker: t, price: 0, change: 0, pct: 0, value: 0 }))).map((etf) => (
             <View key={etf.ticker} style={s.etfRow}>
-              <View style={s.etfDot} />
+              <View style={[s.etfDot, { backgroundColor: ETF_COLORS[etf.ticker] || '#338DFF' }]} />
               <Text style={s.etfTicker}>{etf.ticker}</Text>
-              <Text style={s.etfValue}>{etf.value}</Text>
-              <Text style={[s.etfChange, { color: etf.up ? '#00C896' : '#FF5A5F' }]}>{etf.change}</Text>
+              <View style={s.etfMid}>
+                <Text style={s.etfPrice}>{etf.price > 0 ? `$${etf.price.toFixed(2)}` : '—'}</Text>
+                {etf.value > 0 && (
+                  <Text style={s.etfHolding}>${etf.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                )}
+              </View>
+              <Text style={[s.etfChange, { color: etf.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                {etf.pct >= 0 ? '+' : ''}{etf.pct.toFixed(2)}%
+              </Text>
             </View>
           ))}
         </View>
@@ -198,21 +236,27 @@ export default function PortfolioScreen() {
         {/* Allocation */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ALLOCATION</Text>
-          {[
-            { ticker: 'SCHD', pct: 32, color: '#338DFF' },
-            { ticker: 'VTI', pct: 26, color: '#00C896' },
-            { ticker: 'QQQM', pct: 23, color: '#FF9F43' },
-            { ticker: 'JEPI', pct: 9, color: '#A78BFA' },
-            { ticker: 'Cash', pct: 10, color: '#4A6080' },
-          ].map((item) => (
-            <View key={item.ticker} style={s.allocRow}>
-              <Text style={s.allocTicker}>{item.ticker}</Text>
-              <View style={s.allocBarBg}>
-                <View style={[s.allocBarFill, { width: `${item.pct}%` as any, backgroundColor: item.color }]} />
+          {(liveETFs.length > 0 ? liveETFs : myETFs.map((t, i) => ({
+            ticker: t, pct: Math.round(100 / myETFs.length),
+            color: ETF_COLORS[t] || '#338DFF',
+          }))).map((item, i) => {
+            const total = liveETFs.reduce((sum, e) => sum + e.value, 0);
+            const pct = total > 0
+              ? Math.round(((liveETFs[i]?.value || 0) / total) * 100)
+              : Math.round(100 / myETFs.length);
+            return (
+              <View key={item.ticker} style={s.allocRow}>
+                <Text style={s.allocTicker}>{item.ticker}</Text>
+                <View style={s.allocBarBg}>
+                  <View style={[s.allocBarFill, {
+                    width: `${pct}%` as any,
+                    backgroundColor: ETF_COLORS[item.ticker] || '#338DFF'
+                  }]} />
+                </View>
+                <Text style={s.allocPct}>{pct}%</Text>
               </View>
-              <Text style={s.allocPct}>{item.pct}%</Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* ── ANALYTICS ── */}
@@ -470,7 +514,8 @@ const s = StyleSheet.create({
   heroLabel: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 6 },
   heroValue: { fontSize: 34, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'], marginBottom: 6 },
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16 },
-  heroChange: { fontSize: 13, color: '#00C896', fontWeight: '600' },
+  heroChange: { fontSize: 13, fontWeight: '600' },
+  heroHint: { fontSize: 12, color: '#4A6080', fontStyle: 'italic', marginBottom: 16 },
   heroStats: { flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)', paddingTop: 14 },
   heroStat: { flex: 1, alignItems: 'center' },
   heroStatLabel: { fontSize: 10, color: '#4A6080', marginBottom: 4 },
@@ -481,10 +526,12 @@ const s = StyleSheet.create({
   sectionTitle: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 12 },
   viewAll: { fontSize: 12, color: '#338DFF' },
   etfRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)', gap: 8 },
-  etfDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#338DFF' },
-  etfTicker: { flex: 1, fontSize: 14, fontWeight: '700', color: '#E8EEF8' },
-  etfValue: { fontSize: 14, color: '#C8D8F0', fontVariant: ['tabular-nums'] },
-  etfChange: { fontSize: 13, fontWeight: '600', width: 60, textAlign: 'right' },
+  etfDot: { width: 6, height: 6, borderRadius: 3 },
+  etfTicker: { width: 48, fontSize: 14, fontWeight: '700', color: '#E8EEF8' },
+  etfMid: { flex: 1 },
+  etfPrice: { fontSize: 14, color: '#C8D8F0', fontVariant: ['tabular-nums'] },
+  etfHolding: { fontSize: 11, color: '#4A6080', fontVariant: ['tabular-nums'] },
+  etfChange: { fontSize: 13, fontWeight: '600', width: 64, textAlign: 'right' },
   allocRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   allocTicker: { width: 44, fontSize: 12, color: '#C8D8F0', fontWeight: '600' },
   allocBarBg: { flex: 1, height: 6, backgroundColor: '#1E2A3A', borderRadius: 3, overflow: 'hidden', marginHorizontal: 10 },
