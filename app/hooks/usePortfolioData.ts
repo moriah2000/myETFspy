@@ -25,28 +25,27 @@ export const ETF_COLORS: Record<string, string> = {
   QQQI: '#E879F9',
 };
 
-const REFRESH_INTERVAL = 10 * 60 * 1000; // 10 minutes
+const REFRESH_INTERVAL = 60 * 1000; // 1 minute
 
 export function usePortfolioData() {
   const [positions, setPositions] = useState<ETFPosition[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
     try {
       const [etfsRaw, holdingsRaw] = await Promise.all([
         AsyncStorage.getItem('userETFs'),
         AsyncStorage.getItem('userHoldings'),
       ]);
-
       const tickers: string[] = etfsRaw
         ? JSON.parse(etfsRaw)
         : ['SCHD', 'VTI', 'QQQM', 'JEPI'];
       const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-
       const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
-
       const data: ETFPosition[] = tickers.map((ticker, i) => {
         const p = prices[i];
         const qty = parseFloat(holdingsData[ticker]?.qty || '0');
@@ -63,39 +62,53 @@ export function usePortfolioData() {
           color: ETF_COLORS[ticker] || '#338DFF',
         };
       });
-
       setPositions(data);
       setLastUpdated(new Date());
     } catch (e) {
       console.error('Portfolio fetch error:', e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
-  useEffect(() => {
+  const reset = useCallback(() => {
+    setPositions([]);
+    setLoading(true);
+    setLastUpdated(null);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
+
+  const startFetching = useCallback(() => {
     fetchData();
-    intervalRef.current = setInterval(fetchData, REFRESH_INTERVAL);
+    intervalRef.current = setInterval(() => fetchData(), REFRESH_INTERVAL);
+  }, [fetchData]);
+
+  useEffect(() => {
+    startFetching();
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [fetchData]);
+  }, [startFetching]);
 
   const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
   const totalChange = positions.reduce((sum, p) => sum + p.qty * p.change, 0);
   const totalChangePct = totalValue > 0
-    ? ((totalChange / (totalValue - totalChange)) * 100)
+    ? (totalChange / (totalValue - totalChange)) * 100
     : 0;
   const hasValues = totalValue > 0;
 
   return {
     positions,
     loading,
+    refreshing,
     lastUpdated,
     totalValue,
     totalChange,
     totalChangePct,
     hasValues,
-    refresh: fetchData,
+    refresh: () => fetchData(true),
+    reset,
+    startFetching,
   };
 }
