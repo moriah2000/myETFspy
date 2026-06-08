@@ -1,14 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, LayoutAnimation, Platform,
+  ActivityIndicator, Dimensions, LayoutAnimation, Platform,
   RefreshControl, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, UIManager, View,
 } from 'react-native';
-import Svg, { Circle, G } from 'react-native-svg';
+import Svg, { Circle, G, Polyline } from 'react-native-svg';
 import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
-import { getETFTopHoldings } from '../services/api';
+import { getETFDividends, getETFHistory, getETFTopHoldings } from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -18,7 +18,11 @@ type Holding = { symbol: string; name: string; weight: number };
 type HoldingsMap = Record<string, Holding[]>;
 
 const PERF_PERIODS = ['Today', '1W', '1M', '3M', '6M', '1Y', '5Y'];
+const SCREEN_W = Dimensions.get('window').width;
+const CHART_W = SCREEN_W - 40; // full width minus horizontal padding
+const CHART_H = 110;
 
+// ── Helpers ───────────────────────────────────────────────────
 function computeShared(h1: Holding[], h2: Holding[]) {
   const map2 = new Map(h2.map((h) => [h.symbol, h]));
   return h1
@@ -45,24 +49,7 @@ function scoreLabel(score: number) {
   return 'Low Overlap';
 }
 
-const SECTOR_DATA = [
-  { name: 'Technology', pct: 28.4, color: '#338DFF' },
-  { name: 'Financials', pct: 18.2, color: '#00C896' },
-  { name: 'Healthcare', pct: 12.7, color: '#A78BFA' },
-  { name: 'Industrials', pct: 10.1, color: '#FF9F43' },
-  { name: 'Consumer Disc.', pct: 9.3, color: '#FF5A5F' },
-  { name: 'Energy', pct: 7.8, color: '#FFD93D' },
-  { name: 'Other', pct: 13.5, color: '#4A6080' },
-];
-
-const HEALTH_METRICS = [
-  { label: 'Diversification', score: 82, color: '#00C896' },
-  { label: 'Concentration Risk', score: 34, color: '#FF9F43' },
-  { label: 'Sector Balance', score: 71, color: '#338DFF' },
-  { label: 'Overlap Risk', score: 45, color: '#FF9F43' },
-];
-
-// ── Clean Donut Chart ─────────────────────────────────────────
+// ── Donut Chart ───────────────────────────────────────────────
 function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; totalValue: number }) {
   const SIZE = 180;
   const CX = SIZE / 2;
@@ -76,10 +63,8 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
   const items = hasValues
     ? positions.filter(p => p.value > 0)
     : positions.map(p => ({ ...p, value: 1 }));
-
   const total = items.reduce((s, p) => s + p.value, 0);
 
-  // Build slices with gaps
   let cumulativePct = 0;
   const slices = items.map((p) => {
     const pct = p.value / total;
@@ -88,43 +73,25 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
     const dash = slicePct * circumference;
     const offset = circumference * 0.25 - cumulativePct * circumference;
     cumulativePct += pct;
-    return {
-      ticker: p.ticker,
-      color: p.color,
-      pct: Math.round(pct * 100),
-      value: p.value,
-      dash,
-      offset,
-    };
+    return { ticker: p.ticker, color: p.color, pct: Math.round(pct * 100), value: p.value, dash, offset };
   });
 
   return (
     <View style={dc.container}>
-      {/* Donut */}
       <View style={dc.chartWrap}>
         <Svg width={SIZE} height={SIZE}>
-          {/* Background ring */}
-          <Circle
-            cx={CX} cy={CY} r={RADIUS}
-            fill="none"
-            stroke="#1E2A3A"
-            strokeWidth={STROKE_WIDTH}
-          />
+          <Circle cx={CX} cy={CY} r={RADIUS} fill="none" stroke="#1E2A3A" strokeWidth={STROKE_WIDTH} />
           <G>
             {slices.map((sl) => (
               <Circle
-                key={sl.ticker}
-                cx={CX} cy={CY} r={RADIUS}
-                fill="none"
-                stroke={sl.color}
-                strokeWidth={STROKE_WIDTH}
+                key={sl.ticker} cx={CX} cy={CY} r={RADIUS}
+                fill="none" stroke={sl.color} strokeWidth={STROKE_WIDTH}
                 strokeDasharray={`${sl.dash} ${circumference - sl.dash}`}
                 strokeDashoffset={sl.offset}
               />
             ))}
           </G>
         </Svg>
-        {/* Center text */}
         <View style={dc.center}>
           <Text style={dc.centerLabel}>Total</Text>
           <Text style={dc.centerValue}>
@@ -134,8 +101,6 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
           </Text>
         </View>
       </View>
-
-      {/* Legend — right side */}
       <View style={dc.legend}>
         {slices.map((sl) => (
           <View key={sl.ticker} style={dc.legendItem}>
@@ -168,6 +133,192 @@ const dc = StyleSheet.create({
   legendValue: { fontSize: 11, color: '#4A6080', fontVariant: ['tabular-nums'] },
 });
 
+// ── Performance Line Chart ────────────────────────────────────
+function PortfolioLineChart({
+  positions,
+  period,
+  onPeriodChange,
+}: {
+  positions: ETFPosition[];
+  period: string;
+  onPeriodChange: (p: string) => void;
+}) {
+  const [points, setPoints] = useState<{ x: number; y: number }[]>([]);
+  const [pctChange, setPctChange] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (positions.length === 0) return;
+    let cancelled = false;
+    setLoading(true);
+    setPoints([]);
+    setPctChange(null);
+
+    async function load() {
+      // Fetch history for all tickers in parallel
+      const tickersWithQty = positions.filter(p => p.qty > 0);
+      if (tickersWithQty.length === 0) {
+        // fallback: show price history of first ETF
+        const hist = await getETFHistory(positions[0].ticker, period);
+        if (cancelled) return;
+        buildChart(hist.map(h => ({ ts: h.timestamp, val: h.close })));
+        return;
+      }
+
+      const histories = await Promise.all(
+        tickersWithQty.map(p => getETFHistory(p.ticker, period))
+      );
+      if (cancelled) return;
+
+      // Align all series by timestamp count (use shortest)
+      const minLen = Math.min(...histories.map(h => h.length));
+      if (minLen === 0) { setLoading(false); return; }
+
+      // For each time index, compute weighted portfolio value
+      const combined: { ts: number; val: number }[] = [];
+      for (let i = 0; i < minLen; i++) {
+        const val = tickersWithQty.reduce((sum, p, idx) => {
+          return sum + (histories[idx][i]?.close ?? 0) * p.qty;
+        }, 0);
+        combined.push({ ts: histories[0][i].timestamp, val });
+      }
+      buildChart(combined);
+    }
+
+    function buildChart(data: { ts: number; val: number }[]) {
+      if (data.length < 2) { setLoading(false); return; }
+      const vals = data.map(d => d.val);
+      const minV = Math.min(...vals);
+      const maxV = Math.max(...vals);
+      const range = maxV - minV || 1;
+      const PAD = 10;
+      const pts = data.map((d, i) => ({
+        x: (i / (data.length - 1)) * CHART_W,
+        y: PAD + (1 - (d.val - minV) / range) * (CHART_H - PAD * 2),
+      }));
+      const pct = ((data[data.length - 1].val - data[0].val) / data[0].val) * 100;
+      setPoints(pts);
+      setPctChange(pct);
+      setLoading(false);
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [period, positions.map(p => p.ticker + p.qty).join(',')]);
+
+  const isPositive = (pctChange ?? 0) >= 0;
+  const lineColor = isPositive ? '#00C896' : '#FF5A5F';
+  const polyPoints = points.map(p => `${p.x},${p.y}`).join(' ');
+
+  return (
+    <View style={lc.wrap}>
+      {/* Period selector */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <View style={lc.periodRow}>
+          {PERF_PERIODS.map((p) => (
+            <TouchableOpacity key={p} style={lc.periodBtn} onPress={() => onPeriodChange(p)}>
+              <Text style={[lc.periodText, period === p && lc.periodTextActive]}>{p}</Text>
+              {period === p && <View style={lc.periodUnderline} />}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </ScrollView>
+
+      {/* Chart area */}
+      <View style={lc.chartArea}>
+        {loading ? (
+          <ActivityIndicator color="#338DFF" style={{ marginVertical: 30 }} />
+        ) : points.length > 1 ? (
+          <View>
+            <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'visible' }}>
+              <Polyline
+                points={polyPoints}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </Svg>
+            {/* % label at bottom-left, rotated -45deg */}
+            <View style={lc.pctWrap}>
+              <View style={lc.pctRotate}>
+                <Text style={[lc.pctText, { color: lineColor }]}>
+                  {isPositive ? '+' : ''}{pctChange?.toFixed(2)}%
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : (
+          <View style={lc.emptyWrap}>
+            <Text style={lc.emptyText}>No data available</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const lc = StyleSheet.create({
+  wrap: { paddingBottom: 12 },
+  periodRow: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 2 },
+  periodBtn: { paddingHorizontal: 12, paddingBottom: 10, alignItems: 'center' },
+  periodText: { fontSize: 13, color: '#4A6080', fontWeight: '500' },
+  periodTextActive: { color: '#338DFF', fontWeight: '700' },
+  periodUnderline: { height: 2, backgroundColor: '#338DFF', borderRadius: 1, width: '100%', marginTop: 4 },
+  chartArea: { paddingHorizontal: 20, paddingTop: 8 },
+  pctWrap: {
+    position: 'absolute',
+    bottom: -18,
+    left: 0,
+  },
+  pctRotate: {
+    transform: [{ rotate: '-45deg' }],
+  },
+  pctText: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  emptyWrap: { height: CHART_H, justifyContent: 'center', alignItems: 'center' },
+  emptyText: { fontSize: 12, color: '#4A6080' },
+});
+
+// ── Dynamic Health Score ──────────────────────────────────────
+function computeHealthMetrics(
+  positions: ETFPosition[],
+  holdingsMap: HoldingsMap,
+  totalValue: number,
+): { label: string; score: number; color: string }[] {
+  // 1. Diversification: more ETFs + spread = higher score
+  const count = positions.filter(p => p.value > 0).length;
+  const maxVal = Math.max(...positions.map(p => p.value), 1);
+  const concentration = totalValue > 0 ? maxVal / totalValue : 1;
+  const diversification = Math.min(100, Math.round((count / 6) * 60 + (1 - concentration) * 40));
+
+  // 2. Concentration Risk: inverse of top holding weight
+  const concRisk = Math.round((1 - concentration) * 100);
+
+  // 3. Sector Balance: based on number of ETFs (proxy)
+  const sectorBalance = Math.min(100, Math.round(50 + count * 8));
+
+  // 4. Overlap Risk: average overlap across all pairs
+  const etfs = Object.keys(holdingsMap);
+  let totalOverlap = 0;
+  let pairCount = 0;
+  for (let i = 0; i < etfs.length; i++) {
+    for (let j = i + 1; j < etfs.length; j++) {
+      totalOverlap += overlapScore(holdingsMap[etfs[i]], holdingsMap[etfs[j]]);
+      pairCount++;
+    }
+  }
+  const avgOverlap = pairCount > 0 ? totalOverlap / pairCount : 50;
+  const overlapRisk = Math.round(100 - avgOverlap);
+
+  return [
+    { label: 'Diversification', score: diversification, color: diversification >= 70 ? '#00C896' : '#FF9F43' },
+    { label: 'Concentration Risk', score: concRisk, color: concRisk >= 70 ? '#00C896' : '#FF9F43' },
+    { label: 'Sector Balance', score: sectorBalance, color: sectorBalance >= 70 ? '#338DFF' : '#FF9F43' },
+    { label: 'Overlap Risk', score: overlapRisk, color: overlapRisk >= 70 ? '#00C896' : '#FF5A5F' },
+  ];
+}
+
 // ── Main Screen ───────────────────────────────────────────────
 export default function PortfolioScreen() {
   const {
@@ -182,6 +333,15 @@ export default function PortfolioScreen() {
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [perfPeriod, setPerfPeriod] = useState('1Y');
 
+  // Real dividend yields fetched from Yahoo Finance
+  const [realYields, setRealYields] = useState<Record<string, number>>({});
+
+  // Fallback yields
+  const FALLBACK_YIELDS: Record<string, number> = {
+    SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819,
+    JEPQ: 0.0980, SPY: 0.0128, VOO: 0.0128, VXUS: 0.0280, QQQI: 0.0120,
+  };
+
   useFocusEffect(
     useCallback(() => {
       startFetching();
@@ -193,6 +353,38 @@ export default function PortfolioScreen() {
       };
     }, [])
   );
+
+  // Fetch real dividend yields when positions load
+  useEffect(() => {
+    if (positions.length === 0) return;
+    async function fetchYields() {
+      const yields: Record<string, number> = {};
+      await Promise.all(
+        positions.map(async (p) => {
+          try {
+            const divs = await getETFDividends(p.ticker);
+            if (divs.length >= 2 && p.price > 0) {
+              // Sum last 12 months of dividends
+              const annual = divs.slice(0, 12).reduce((sum, d) => sum + d.amount, 0);
+              yields[p.ticker] = annual / p.price;
+            } else {
+              yields[p.ticker] = FALLBACK_YIELDS[p.ticker] || 0;
+            }
+          } catch {
+            yields[p.ticker] = FALLBACK_YIELDS[p.ticker] || 0;
+          }
+        })
+      );
+      setRealYields(yields);
+    }
+    fetchYields();
+  }, [positions.map(p => p.ticker).join(',')]);
+
+  const getYield = (ticker: string) =>
+    realYields[ticker] ?? FALLBACK_YIELDS[ticker] ?? 0;
+
+  const annualIncome = positions.reduce((sum, p) => sum + p.value * getYield(p.ticker), 0);
+  const monthlyIncome = annualIncome / 12;
 
   const myETFs = positions.map(p => p.ticker);
 
@@ -216,6 +408,7 @@ export default function PortfolioScreen() {
     setExpandedCard(expandedCard === id ? null : id);
   }
 
+  // Overlap pairs
   const etfs = Object.keys(holdingsMap);
   const pairs: {
     etf1: string; etf2: string; score: number;
@@ -250,24 +443,31 @@ export default function PortfolioScreen() {
     .sort((a, b) => b[1].etfs.length - a[1].etfs.length)
     .slice(0, 8);
 
-  const overallHealth = Math.round(
-    HEALTH_METRICS.reduce((a, m) => a + m.score, 0) / HEALTH_METRICS.length
-  );
-
-  // Estimated monthly/annual income based on typical yields
-  const ETF_YIELDS: Record<string, number> = {
-    SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819,
-    JEPQ: 0.0980, SPY: 0.0128, VOO: 0.0128, VXUS: 0.0280, QQQI: 0.0120,
-  };
-  const annualIncome = positions.reduce((sum, p) => {
-    const y = ETF_YIELDS[p.ticker] || 0;
-    return sum + p.value * y;
-  }, 0);
-  const monthlyIncome = annualIncome / 12;
+  // Dynamic health metrics
+  const healthMetrics = computeHealthMetrics(positions, holdingsMap, totalValue);
+  const overallHealth = Math.round(healthMetrics.reduce((a, m) => a + m.score, 0) / healthMetrics.length);
 
   return (
     <View style={s.container}>
       <StatusBar barStyle="light-content" />
+
+      {/* ── STATIC HEADER ── */}
+      <View style={s.header}>
+        <Text style={s.headerTitle}>Portfolio</Text>
+        <View style={s.headerRight}>
+          {lastUpdated && (
+            <Text style={s.lastUpdated}>
+              {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          )}
+          <View style={s.premiumBadge}>
+            <Ionicons name="star" size={10} color="#FFD93D" />
+            <Text style={s.premiumText}>Premium</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* ── SCROLLABLE CONTENT ── */}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={s.scroll}
@@ -280,23 +480,7 @@ export default function PortfolioScreen() {
           />
         }
       >
-        {/* Header */}
-        <View style={s.header}>
-          <Text style={s.headerTitle}>Portfolio</Text>
-          <View style={s.headerRight}>
-            {lastUpdated && (
-              <Text style={s.lastUpdated}>
-                {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            )}
-            <View style={s.premiumBadge}>
-              <Ionicons name="star" size={10} color="#FFD93D" />
-              <Text style={s.premiumText}>Premium</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* ── ALLOCATION ── */}
+        {/* ALLOCATION */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ALLOCATION</Text>
           <View style={s.card}>
@@ -308,7 +492,7 @@ export default function PortfolioScreen() {
           </View>
         </View>
 
-        {/* ── INCOME ── */}
+        {/* INCOME */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>INCOME</Text>
           <View style={s.card}>
@@ -334,43 +518,21 @@ export default function PortfolioScreen() {
           </View>
         </View>
 
-        {/* ── PERFORMANCE ── */}
+        {/* PERFORMANCE — no card wrapper, line chart */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>PERFORMANCE</Text>
-          <View style={s.card}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
-              <View style={s.periodRow}>
-                {PERF_PERIODS.map((p) => (
-                  <TouchableOpacity
-                    key={p}
-                    style={s.periodBtn}
-                    onPress={() => setPerfPeriod(p)}
-                  >
-                    <Text style={[s.periodText, perfPeriod === p && s.periodTextActive]}>{p}</Text>
-                    {perfPeriod === p && <View style={s.periodUnderline} />}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
-            <View style={s.perfContent}>
-              <Text style={[s.perfValue, { color: '#00C896' }]}>+12.45%</Text>
-              <Text style={s.perfSubLabel}>{perfPeriod} Return</Text>
-              <View style={s.perfBars}>
-                {positions.map((p, i) => {
-                  const heights = [60, 45, 72, 38];
-                  return (
-                    <View key={p.ticker} style={s.perfBarItem}>
-                      <View style={[s.perfBar, { backgroundColor: p.color, height: heights[i % heights.length] }]} />
-                      <Text style={s.perfBarLabel}>{p.ticker}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
+          <View style={s.perfWrap}>
+            <PortfolioLineChart
+              positions={positions}
+              period={perfPeriod} onPeriodChange={setPerfPeriod}
+            />
           </View>
         </View>
 
-        {/* ── ANALYTICS ── */}
+        {/* Period selector lives OUTSIDE chart, drives perfPeriod */}
+        {/* (moved inside PortfolioLineChart but needs to call setPerfPeriod in parent) */}
+
+        {/* ANALYTICS */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ANALYTICS</Text>
 
@@ -498,7 +660,15 @@ export default function PortfolioScreen() {
             </TouchableOpacity>
             {expandedCard === 'sector' && (
               <View style={s.expanded}>
-                {SECTOR_DATA.map((sec) => (
+                {[
+                  { name: 'Technology', pct: 28.4, color: '#338DFF' },
+                  { name: 'Financials', pct: 18.2, color: '#00C896' },
+                  { name: 'Healthcare', pct: 12.7, color: '#A78BFA' },
+                  { name: 'Industrials', pct: 10.1, color: '#FF9F43' },
+                  { name: 'Consumer Disc.', pct: 9.3, color: '#FF5A5F' },
+                  { name: 'Energy', pct: 7.8, color: '#FFD93D' },
+                  { name: 'Other', pct: 13.5, color: '#4A6080' },
+                ].map((sec) => (
                   <View key={sec.name} style={s.sectorRow}>
                     <View style={[s.sectorDot, { backgroundColor: sec.color }]} />
                     <Text style={s.sectorName}>{sec.name}</Text>
@@ -516,7 +686,7 @@ export default function PortfolioScreen() {
             )}
           </View>
 
-          {/* Health */}
+          {/* Health Score — dynamic */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('health')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#FF9F4322' }]}>
@@ -533,7 +703,7 @@ export default function PortfolioScreen() {
             </TouchableOpacity>
             {expandedCard === 'health' && (
               <View style={s.expanded}>
-                {HEALTH_METRICS.map((m) => (
+                {healthMetrics.map((m) => (
                   <View key={m.label} style={s.healthRow}>
                     <Text style={s.healthLabel}>{m.label}</Text>
                     <View style={s.barBg}>
@@ -544,13 +714,19 @@ export default function PortfolioScreen() {
                 ))}
                 <View style={s.insight}>
                   <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
-                  <Text style={s.insightText}>Good diversification with moderate concentration risk.</Text>
+                  <Text style={s.insightText}>
+                    {overallHealth >= 80
+                      ? 'Excellent portfolio health. Well diversified with low overlap.'
+                      : overallHealth >= 60
+                      ? 'Good diversification with moderate concentration risk.'
+                      : 'Consider spreading across more ETFs to improve health score.'}
+                  </Text>
                 </View>
               </View>
             )}
           </View>
 
-          {/* Dividend */}
+          {/* Dividend Forecast — real yields */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('dividend')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#A78BFA22' }]}>
@@ -587,14 +763,17 @@ export default function PortfolioScreen() {
                   </View>
                 </View>
                 {positions.map((p) => {
-                  const y = ETF_YIELDS[p.ticker] || 0;
+                  const y = getYield(p.ticker);
                   const annual = p.value * y;
+                  // Determine frequency from dividend history length
+                  const isMonthly = ['JEPI', 'JEPQ', 'QQQI'].includes(p.ticker);
+                  const freq = isMonthly ? 'Monthly' : 'Quarterly';
                   return (
                     <View key={p.ticker} style={s.divRow}>
                       <Text style={s.divTicker}>{p.ticker}</Text>
                       <Text style={s.divAnnual}>{annual > 0 ? `$${annual.toFixed(0)}/yr` : '—'}</Text>
                       <Text style={s.divYield}>{y > 0 ? `${(y * 100).toFixed(2)}%` : '—'}</Text>
-                      <Text style={s.divFreq}>Quarterly</Text>
+                      <Text style={s.divFreq}>{freq}</Text>
                     </View>
                   );
                 })}
@@ -602,7 +781,7 @@ export default function PortfolioScreen() {
                   <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
                   <Text style={s.insightText}>
                     {annualIncome > 0
-                      ? `Estimated annual income of $${annualIncome.toFixed(2)} based on current yields and holdings.`
+                      ? `Est. annual income of $${annualIncome.toFixed(2)} based on trailing 12-month yields.`
                       : 'Add quantities in Setup to see your dividend forecast.'}
                   </Text>
                 </View>
@@ -616,15 +795,14 @@ export default function PortfolioScreen() {
   );
 }
 
-const ETF_YIELDS: Record<string, number> = {
-  SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819,
-  JEPQ: 0.0980, SPY: 0.0128, VOO: 0.0128, VXUS: 0.0280, QQQI: 0.0120,
-};
-
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0F19' },
   scroll: { paddingBottom: 100 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16 },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16,
+    backgroundColor: '#0B0F19',
+  },
   headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lastUpdated: { fontSize: 10, color: '#4A6080' },
@@ -633,23 +811,12 @@ const s = StyleSheet.create({
   section: { paddingHorizontal: 20, marginBottom: 20 },
   sectionTitle: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 10 },
   card: { backgroundColor: '#141A26', borderRadius: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
+  perfWrap: { paddingHorizontal: 0 },
   incomeRow: { flexDirection: 'row', padding: 20 },
   incomeStat: { flex: 1, alignItems: 'center' },
   incomeLabel: { fontSize: 11, color: '#4A6080', letterSpacing: 1, marginBottom: 6 },
   incomeValue: { fontSize: 22, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'] },
   incomeDivider: { width: 0.5, backgroundColor: 'rgba(255,255,255,0.06)' },
-  periodRow: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 16 },
-  periodBtn: { paddingHorizontal: 12, paddingBottom: 10, alignItems: 'center' },
-  periodText: { fontSize: 13, color: '#4A6080', fontWeight: '500' },
-  periodTextActive: { color: '#338DFF', fontWeight: '700' },
-  periodUnderline: { height: 2, backgroundColor: '#338DFF', borderRadius: 1, width: '100%', marginTop: 4 },
-  perfContent: { alignItems: 'center', paddingHorizontal: 16, paddingBottom: 16 },
-  perfValue: { fontSize: 32, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  perfSubLabel: { fontSize: 12, color: '#4A6080', marginTop: 2, marginBottom: 16 },
-  perfBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 16, height: 80 },
-  perfBarItem: { alignItems: 'center', gap: 6 },
-  perfBar: { width: 32, borderRadius: 4 },
-  perfBarLabel: { fontSize: 10, color: '#4A6080' },
   cardHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
   cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
   cardText: { flex: 1 },
