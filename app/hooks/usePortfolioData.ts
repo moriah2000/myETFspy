@@ -25,7 +25,7 @@ export const ETF_COLORS: Record<string, string> = {
   QQQI: '#E879F9',
 };
 
-const REFRESH_INTERVAL = 60 * 1000; // 1 minute
+const REFRESH_INTERVAL = 10 * 1000; // 1 minute
 
 export function usePortfolioData() {
   const [positions, setPositions] = useState<ETFPosition[]>([]);
