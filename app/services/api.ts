@@ -87,3 +87,28 @@ export async function getETFTopHoldings(ticker: string): Promise<{ symbol: strin
     return [];
   }
 }
+export async function getETFHistory(ticker: string, range: string): Promise<{ timestamp: number; close: number }[]> {
+  const intervalMap: Record<string, string> = {
+    'Today': '5m',  '1W': '1d', '1M': '1d',
+    '3M': '1wk', '6M': '1wk', '1Y': '1mo', '5Y': '3mo',
+  };
+  const rangeMap: Record<string, string> = {
+    'Today': '1d', '1W': '5d', '1M': '1mo',
+    '3M': '3mo', '6M': '6mo', '1Y': '1y', '5Y': '5y',
+  };
+  const interval = intervalMap[range] || '1d';
+  const r = rangeMap[range] || '1y';
+  try {
+    const url = `${BASE_URL}/v8/finance/chart/${ticker}?interval=${interval}&range=${r}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    const result = data?.chart?.result?.[0];
+    const timestamps: number[] = result?.timestamp || [];
+    const closes: number[] = result?.indicators?.quote?.[0]?.close || [];
+    return timestamps
+      .map((t, i) => ({ timestamp: t, close: closes[i] }))
+      .filter(p => p.close != null && !isNaN(p.close));
+  } catch (e) {
+    return [];
+  }
+}
