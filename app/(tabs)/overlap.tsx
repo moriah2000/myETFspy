@@ -6,7 +6,7 @@ import {
   RefreshControl, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, UIManager, View,
 } from 'react-native';
-import Svg, { Circle, G, Polyline } from 'react-native-svg';
+import Svg, { Circle, Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
 import { getETFDividends, getETFHistory, getETFTopHoldings } from '../services/api';
 
@@ -19,8 +19,71 @@ type HoldingsMap = Record<string, Holding[]>;
 
 const PERF_PERIODS = ['Today', '1W', '1M', '3M', '6M', '1Y', '5Y'];
 const SCREEN_W = Dimensions.get('window').width;
-const CHART_W = SCREEN_W - 40; // full width minus horizontal padding
-const CHART_H = 110;
+const CHART_W = SCREEN_W - 80;
+const CHART_H = 120;
+
+// ── ETF Sector Mappings ───────────────────────────────────────
+const SYMBOL_SECTOR: Record<string, string> = {
+  AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AVGO: 'Technology',
+  META: 'Technology', GOOGL: 'Technology', GOOG: 'Technology', AMD: 'Technology',
+  ORCL: 'Technology', CSCO: 'Technology', ACN: 'Technology', IBM: 'Technology',
+  TXN: 'Technology', QCOM: 'Technology', NOW: 'Technology', ADBE: 'Technology',
+  AMAT: 'Technology', MU: 'Technology', KLAC: 'Technology', LRCX: 'Technology',
+  AMZN: 'Consumer Disc.', TSLA: 'Consumer Disc.', HD: 'Consumer Disc.',
+  MCD: 'Consumer Disc.', NKE: 'Consumer Disc.', SBUX: 'Consumer Disc.',
+  TJX: 'Consumer Disc.', LOW: 'Consumer Disc.', BKNG: 'Consumer Disc.',
+  JPM: 'Financials', V: 'Financials', MA: 'Financials', BAC: 'Financials',
+  WFC: 'Financials', GS: 'Financials', MS: 'Financials', BLK: 'Financials',
+  AXP: 'Financials', SPGI: 'Financials', CB: 'Financials', PGR: 'Financials',
+  TRV: 'Financials', AFL: 'Financials', PRU: 'Financials',
+  LLY: 'Healthcare', UNH: 'Healthcare', JNJ: 'Healthcare', ABBV: 'Healthcare',
+  MRK: 'Healthcare', TMO: 'Healthcare', ABT: 'Healthcare', ISRG: 'Healthcare',
+  DHR: 'Healthcare', BMY: 'Healthcare', PFE: 'Healthcare', AMGN: 'Healthcare',
+  CAT: 'Industrials', DE: 'Industrials', HON: 'Industrials', GE: 'Industrials',
+  UPS: 'Industrials', LMT: 'Industrials', RTX: 'Industrials', ETN: 'Industrials',
+  ITW: 'Industrials', MMM: 'Industrials', EMR: 'Industrials', FDX: 'Industrials',
+  XOM: 'Energy', CVX: 'Energy', COP: 'Energy', SLB: 'Energy', EOG: 'Energy',
+  PSX: 'Energy', VLO: 'Energy', MPC: 'Energy',
+  PG: 'Consumer Staples', KO: 'Consumer Staples', PEP: 'Consumer Staples',
+  WMT: 'Consumer Staples', COST: 'Consumer Staples', PM: 'Consumer Staples',
+  MO: 'Consumer Staples', CL: 'Consumer Staples',
+  NEE: 'Utilities', DUK: 'Utilities', SO: 'Utilities', D: 'Utilities',
+  AEP: 'Utilities', EXC: 'Utilities', XEL: 'Utilities',
+  PLD: 'Real Estate', AMT: 'Real Estate', EQIX: 'Real Estate', SPG: 'Real Estate',
+  NFLX: 'Communication', DIS: 'Communication', CMCSA: 'Communication',
+  T: 'Communication', VZ: 'Communication', TMUS: 'Communication',
+  LIN: 'Materials', APD: 'Materials', SHW: 'Materials', ECL: 'Materials',
+};
+
+const SECTOR_COLORS: Record<string, string> = {
+  'Technology': '#338DFF', 'Financials': '#00C896', 'Healthcare': '#A78BFA',
+  'Industrials': '#FF9F43', 'Consumer Disc.': '#FF5A5F', 'Energy': '#FFD93D',
+  'Consumer Staples': '#4FC3F7', 'Communication': '#E879F9', 'Utilities': '#81C784',
+  'Real Estate': '#F48FB1', 'Materials': '#FFCC02', 'Other': '#4A6080',
+};
+
+function computeSectorExposure(
+  positions: ETFPosition[],
+  holdingsMap: HoldingsMap,
+  totalValue: number,
+): { name: string; pct: number; color: string }[] {
+  if (totalValue === 0 || Object.keys(holdingsMap).length === 0) return [];
+  const sectorWeights: Record<string, number> = {};
+  positions.forEach((pos) => {
+    if (pos.value === 0) return;
+    const posWeight = pos.value / totalValue;
+    const holdings = holdingsMap[pos.ticker] || [];
+    const totalHoldingWeight = holdings.reduce((s, h) => s + h.weight, 0) || 100;
+    holdings.forEach((h) => {
+      const sector = SYMBOL_SECTOR[h.symbol] || 'Other';
+      const contribution = posWeight * (h.weight / totalHoldingWeight);
+      sectorWeights[sector] = (sectorWeights[sector] || 0) + contribution * 100;
+    });
+  });
+  return Object.entries(sectorWeights)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, pct]) => ({ name, pct: Math.round(pct * 10) / 10, color: SECTOR_COLORS[name] || '#4A6080' }));
+}
 
 // ── Helpers ───────────────────────────────────────────────────
 function computeShared(h1: Holding[], h2: Holding[]) {
@@ -51,20 +114,16 @@ function scoreLabel(score: number) {
 
 // ── Donut Chart ───────────────────────────────────────────────
 function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; totalValue: number }) {
-  const SIZE = 180;
+  const SIZE = 210;
   const CX = SIZE / 2;
   const CY = SIZE / 2;
-  const RADIUS = 70;
-  const STROKE_WIDTH = 22;
+  const RADIUS = 82;
+  const STROKE_WIDTH = 24;
   const GAP_DEGREES = 3;
   const circumference = 2 * Math.PI * RADIUS;
   const hasValues = totalValue > 0;
-
-  const items = hasValues
-    ? positions.filter(p => p.value > 0)
-    : positions.map(p => ({ ...p, value: 1 }));
+  const items = hasValues ? positions.filter(p => p.value > 0) : positions.map(p => ({ ...p, value: 1 }));
   const total = items.reduce((s, p) => s + p.value, 0);
-
   let cumulativePct = 0;
   const slices = items.map((p) => {
     const pct = p.value / total;
@@ -75,7 +134,6 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
     cumulativePct += pct;
     return { ticker: p.ticker, color: p.color, pct: Math.round(pct * 100), value: p.value, dash, offset };
   });
-
   return (
     <View style={dc.container}>
       <View style={dc.chartWrap}>
@@ -95,9 +153,7 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
         <View style={dc.center}>
           <Text style={dc.centerLabel}>Total</Text>
           <Text style={dc.centerValue}>
-            {hasValues
-              ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : '—'}
+            {hasValues ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
           </Text>
         </View>
       </View>
@@ -108,9 +164,7 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
             <View>
               <Text style={dc.legendTicker}>{sl.ticker}</Text>
               <Text style={dc.legendValue}>
-                {hasValues
-                  ? `$${sl.value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-                  : `${sl.pct}%`}
+                {hasValues ? `$${sl.value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : `${sl.pct}%`}
               </Text>
             </View>
           </View>
@@ -121,23 +175,21 @@ function DonutChart({ positions, totalValue }: { positions: ETFPosition[]; total
 }
 
 const dc = StyleSheet.create({
-  container: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 8 },
-  chartWrap: { position: 'relative', width: 180, height: 180 },
+  container: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 0 },
+  chartWrap: { position: 'relative', width: 210, height: 210 },
   center: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
-  centerLabel: { fontSize: 11, color: '#4A6080', marginBottom: 2 },
-  centerValue: { fontSize: 13, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'], textAlign: 'center' },
-  legend: { flex: 1, paddingLeft: 16, gap: 10 },
+  centerLabel: { fontSize: 12, color: '#4A6080', marginBottom: 2 },
+  centerValue: { fontSize: 14, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'], textAlign: 'center' },
+  legend: { flex: 1, paddingLeft: 32, gap: 12 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: { width: 10, height: 10, borderRadius: 5 },
   legendTicker: { fontSize: 12, color: '#E8EEF8', fontWeight: '600' },
   legendValue: { fontSize: 11, color: '#4A6080', fontVariant: ['tabular-nums'] },
 });
 
-// ── Performance Line Chart ────────────────────────────────────
-function PortfolioLineChart({
-  positions,
-  period,
-  onPeriodChange,
+// ── Area Chart ────────────────────────────────────────────────
+function PortfolioAreaChart({
+  positions, period, onPeriodChange,
 }: {
   positions: ETFPosition[];
   period: string;
@@ -155,48 +207,32 @@ function PortfolioLineChart({
     setPctChange(null);
 
     async function load() {
-      // Fetch history for all tickers in parallel
-      const tickersWithQty = positions.filter(p => p.qty > 0);
-      if (tickersWithQty.length === 0) {
-        // fallback: show price history of first ETF
-        const hist = await getETFHistory(positions[0].ticker, period);
-        if (cancelled) return;
-        buildChart(hist.map(h => ({ ts: h.timestamp, val: h.close })));
-        return;
-      }
-
-      const histories = await Promise.all(
-        tickersWithQty.map(p => getETFHistory(p.ticker, period))
-      );
+      const source = positions.filter(p => p.qty > 0).length > 0
+        ? positions.filter(p => p.qty > 0)
+        : positions;
+      const histories = await Promise.all(source.map(p => getETFHistory(p.ticker, period)));
       if (cancelled) return;
-
-      // Align all series by timestamp count (use shortest)
       const minLen = Math.min(...histories.map(h => h.length));
-      if (minLen === 0) { setLoading(false); return; }
-
-      // For each time index, compute weighted portfolio value
+      if (minLen < 2) { setLoading(false); return; }
       const combined: { ts: number; val: number }[] = [];
       for (let i = 0; i < minLen; i++) {
-        const val = tickersWithQty.reduce((sum, p, idx) => {
-          return sum + (histories[idx][i]?.close ?? 0) * p.qty;
+        const val = source.reduce((sum, p, idx) => {
+          return sum + (histories[idx][i]?.close ?? 0) * (p.qty > 0 ? p.qty : 1);
         }, 0);
         combined.push({ ts: histories[0][i].timestamp, val });
       }
-      buildChart(combined);
-    }
-
-    function buildChart(data: { ts: number; val: number }[]) {
-      if (data.length < 2) { setLoading(false); return; }
-      const vals = data.map(d => d.val);
+      if (cancelled) return;
+      if (combined.length < 2) { setLoading(false); return; }
+      const vals = combined.map(d => d.val);
       const minV = Math.min(...vals);
       const maxV = Math.max(...vals);
       const range = maxV - minV || 1;
-      const PAD = 10;
-      const pts = data.map((d, i) => ({
-        x: (i / (data.length - 1)) * CHART_W,
-        y: PAD + (1 - (d.val - minV) / range) * (CHART_H - PAD * 2),
+      const PAD_TOP = 12, PAD_BOTTOM = 4;
+      const pts = combined.map((d, i) => ({
+        x: (i / (combined.length - 1)) * CHART_W,
+        y: PAD_TOP + (1 - (d.val - minV) / range) * (CHART_H - PAD_TOP - PAD_BOTTOM),
       }));
-      const pct = ((data[data.length - 1].val - data[0].val) / data[0].val) * 100;
+      const pct = ((combined[combined.length - 1].val - combined[0].val) / combined[0].val) * 100;
       setPoints(pts);
       setPctChange(pct);
       setLoading(false);
@@ -208,50 +244,52 @@ function PortfolioLineChart({
 
   const isPositive = (pctChange ?? 0) >= 0;
   const lineColor = isPositive ? '#00C896' : '#FF5A5F';
-  const polyPoints = points.map(p => `${p.x},${p.y}`).join(' ');
+  const linePath = points.length > 1
+    ? points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+    : '';
+  const areaPath = points.length > 1
+    ? `${linePath} L${points[points.length - 1].x.toFixed(1)},${CHART_H} L0,${CHART_H} Z`
+    : '';
 
   return (
-    <View style={lc.wrap}>
-      {/* Period selector */}
+    <View style={ac.wrap}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={lc.periodRow}>
+        <View style={ac.periodRow}>
           {PERF_PERIODS.map((p) => (
-            <TouchableOpacity key={p} style={lc.periodBtn} onPress={() => onPeriodChange(p)}>
-              <Text style={[lc.periodText, period === p && lc.periodTextActive]}>{p}</Text>
-              {period === p && <View style={lc.periodUnderline} />}
+            <TouchableOpacity key={p} style={ac.periodBtn} onPress={() => onPeriodChange(p)}>
+              <Text style={[ac.periodText, period === p && ac.periodTextActive]}>{p}</Text>
+              {period === p && <View style={ac.periodUnderline} />}
             </TouchableOpacity>
           ))}
         </View>
       </ScrollView>
-
-      {/* Chart area */}
-      <View style={lc.chartArea}>
+      {pctChange !== null && (
+        <View style={ac.pctRow}>
+          <Text style={[ac.pctText, { color: lineColor }]}>
+            {isPositive ? '▲' : '▼'} {isPositive ? '+' : ''}{pctChange.toFixed(2)}%
+          </Text>
+          <Text style={ac.pctLabel}>{period} return</Text>
+        </View>
+      )}
+      <View style={ac.chartArea}>
         {loading ? (
-          <ActivityIndicator color="#338DFF" style={{ marginVertical: 30 }} />
-        ) : points.length > 1 ? (
-          <View>
-            <Svg width={CHART_W} height={CHART_H} style={{ overflow: 'visible' }}>
-              <Polyline
-                points={polyPoints}
-                fill="none"
-                stroke={lineColor}
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </Svg>
-            {/* % label at bottom-left, rotated -45deg */}
-            <View style={lc.pctWrap}>
-              <View style={lc.pctRotate}>
-                <Text style={[lc.pctText, { color: lineColor }]}>
-                  {isPositive ? '+' : ''}{pctChange?.toFixed(2)}%
-                </Text>
-              </View>
-            </View>
+          <View style={{ height: CHART_H, justifyContent: 'center', alignItems: 'center' }}>
+            <ActivityIndicator color="#338DFF" />
           </View>
+        ) : points.length > 1 ? (
+          <Svg width={CHART_W} height={CHART_H}>
+            <Defs>
+              <LinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor={lineColor} stopOpacity="0.35" />
+                <Stop offset="100%" stopColor={lineColor} stopOpacity="0.0" />
+              </LinearGradient>
+            </Defs>
+            <Path d={areaPath} fill="url(#areaGrad)" />
+            <Path d={linePath} fill="none" stroke={lineColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
         ) : (
-          <View style={lc.emptyWrap}>
-            <Text style={lc.emptyText}>No data available</Text>
+          <View style={{ height: CHART_H, justifyContent: 'center', alignItems: 'center' }}>
+            <Text style={ac.emptyText}>No data available</Text>
           </View>
         )}
       </View>
@@ -259,24 +297,17 @@ function PortfolioLineChart({
   );
 }
 
-const lc = StyleSheet.create({
-  wrap: { paddingBottom: 12 },
+const ac = StyleSheet.create({
+  wrap: { paddingBottom: 16 },
   periodRow: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 2 },
-  periodBtn: { paddingHorizontal: 12, paddingBottom: 10, alignItems: 'center' },
+  periodBtn: { paddingHorizontal: 11, paddingBottom: 10, alignItems: 'center' },
   periodText: { fontSize: 13, color: '#4A6080', fontWeight: '500' },
   periodTextActive: { color: '#338DFF', fontWeight: '700' },
   periodUnderline: { height: 2, backgroundColor: '#338DFF', borderRadius: 1, width: '100%', marginTop: 4 },
-  chartArea: { paddingHorizontal: 20, paddingTop: 8 },
-  pctWrap: {
-    position: 'absolute',
-    bottom: -18,
-    left: 0,
-  },
-  pctRotate: {
-    transform: [{ rotate: '-45deg' }],
-  },
-  pctText: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  emptyWrap: { height: CHART_H, justifyContent: 'center', alignItems: 'center' },
+  pctRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: 20, paddingBottom: 8 },
+  pctText: { fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  pctLabel: { fontSize: 12, color: '#4A6080' },
+  chartArea: { paddingHorizontal: 20 },
   emptyText: { fontSize: 12, color: '#4A6080' },
 });
 
@@ -286,31 +317,22 @@ function computeHealthMetrics(
   holdingsMap: HoldingsMap,
   totalValue: number,
 ): { label: string; score: number; color: string }[] {
-  // 1. Diversification: more ETFs + spread = higher score
   const count = positions.filter(p => p.value > 0).length;
   const maxVal = Math.max(...positions.map(p => p.value), 1);
   const concentration = totalValue > 0 ? maxVal / totalValue : 1;
   const diversification = Math.min(100, Math.round((count / 6) * 60 + (1 - concentration) * 40));
-
-  // 2. Concentration Risk: inverse of top holding weight
   const concRisk = Math.round((1 - concentration) * 100);
-
-  // 3. Sector Balance: based on number of ETFs (proxy)
   const sectorBalance = Math.min(100, Math.round(50 + count * 8));
-
-  // 4. Overlap Risk: average overlap across all pairs
-  const etfs = Object.keys(holdingsMap);
-  let totalOverlap = 0;
-  let pairCount = 0;
-  for (let i = 0; i < etfs.length; i++) {
-    for (let j = i + 1; j < etfs.length; j++) {
-      totalOverlap += overlapScore(holdingsMap[etfs[i]], holdingsMap[etfs[j]]);
+  const etfsWithHoldings = Object.keys(holdingsMap);
+  let totalOverlap = 0, pairCount = 0;
+  for (let i = 0; i < etfsWithHoldings.length; i++) {
+    for (let j = i + 1; j < etfsWithHoldings.length; j++) {
+      totalOverlap += overlapScore(holdingsMap[etfsWithHoldings[i]], holdingsMap[etfsWithHoldings[j]]);
       pairCount++;
     }
   }
   const avgOverlap = pairCount > 0 ? totalOverlap / pairCount : 50;
   const overlapRisk = Math.round(100 - avgOverlap);
-
   return [
     { label: 'Diversification', score: diversification, color: diversification >= 70 ? '#00C896' : '#FF9F43' },
     { label: 'Concentration Risk', score: concRisk, color: concRisk >= 70 ? '#00C896' : '#FF9F43' },
@@ -332,11 +354,8 @@ export default function PortfolioScreen() {
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [perfPeriod, setPerfPeriod] = useState('1Y');
-
-  // Real dividend yields fetched from Yahoo Finance
   const [realYields, setRealYields] = useState<Record<string, number>>({});
 
-  // Fallback yields
   const FALLBACK_YIELDS: Record<string, number> = {
     SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819,
     JEPQ: 0.0980, SPY: 0.0128, VOO: 0.0128, VXUS: 0.0280, QQQI: 0.0120,
@@ -354,7 +373,7 @@ export default function PortfolioScreen() {
     }, [])
   );
 
-  // Fetch real dividend yields when positions load
+  // Fetch real dividend yields
   useEffect(() => {
     if (positions.length === 0) return;
     async function fetchYields() {
@@ -364,8 +383,7 @@ export default function PortfolioScreen() {
           try {
             const divs = await getETFDividends(p.ticker);
             if (divs.length >= 2 && p.price > 0) {
-              // Sum last 12 months of dividends
-              const annual = divs.slice(0, 12).reduce((sum, d) => sum + d.amount, 0);
+              const annual = divs.slice(0, 12).reduce((sum: number, d: any) => sum + d.amount, 0);
               yields[p.ticker] = annual / p.price;
             } else {
               yields[p.ticker] = FALLBACK_YIELDS[p.ticker] || 0;
@@ -380,22 +398,34 @@ export default function PortfolioScreen() {
     fetchYields();
   }, [positions.map(p => p.ticker).join(',')]);
 
-  const getYield = (ticker: string) =>
-    realYields[ticker] ?? FALLBACK_YIELDS[ticker] ?? 0;
+  // Prefetch holdings for sector + health
+  useEffect(() => {
+    if (positions.length === 0 || Object.keys(holdingsMap).length > 0) return;
+    async function prefetch() {
+      const results: HoldingsMap = {};
+      await Promise.all(
+        positions.map(async (p) => {
+          const h = await getETFTopHoldings(p.ticker);
+          if (h.length) results[p.ticker] = h;
+        })
+      );
+      setHoldingsMap(results);
+    }
+    prefetch();
+  }, [positions.map(p => p.ticker).join(',')]);
 
+  const getYield = (ticker: string) => realYields[ticker] ?? FALLBACK_YIELDS[ticker] ?? 0;
   const annualIncome = positions.reduce((sum, p) => sum + p.value * getYield(p.ticker), 0);
   const monthlyIncome = annualIncome / 12;
-
-  const myETFs = positions.map(p => p.ticker);
 
   const loadOverlap = async () => {
     if (Object.keys(holdingsMap).length > 0) return;
     setLoadingOverlap(true);
     const results: HoldingsMap = {};
     await Promise.all(
-      myETFs.map(async (ticker) => {
-        const h = await getETFTopHoldings(ticker);
-        if (h.length) results[ticker] = h;
+      positions.map(async (p) => {
+        const h = await getETFTopHoldings(p.ticker);
+        if (h.length) results[p.ticker] = h;
       })
     );
     setHoldingsMap(results);
@@ -408,7 +438,7 @@ export default function PortfolioScreen() {
     setExpandedCard(expandedCard === id ? null : id);
   }
 
-  // Overlap pairs
+  // Build overlap pairs
   const etfs = Object.keys(holdingsMap);
   const pairs: {
     etf1: string; etf2: string; score: number;
@@ -443,7 +473,8 @@ export default function PortfolioScreen() {
     .sort((a, b) => b[1].etfs.length - a[1].etfs.length)
     .slice(0, 8);
 
-  // Dynamic health metrics
+  const sectorData = computeSectorExposure(positions, holdingsMap, totalValue);
+  const topSector = sectorData[0];
   const healthMetrics = computeHealthMetrics(positions, holdingsMap, totalValue);
   const overallHealth = Math.round(healthMetrics.reduce((a, m) => a + m.score, 0) / healthMetrics.length);
 
@@ -451,7 +482,7 @@ export default function PortfolioScreen() {
     <View style={s.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* ── STATIC HEADER ── */}
+      {/* STATIC HEADER */}
       <View style={s.header}>
         <Text style={s.headerTitle}>Portfolio</Text>
         <View style={s.headerRight}>
@@ -467,30 +498,22 @@ export default function PortfolioScreen() {
         </View>
       </View>
 
-      {/* ── SCROLLABLE CONTENT ── */}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={s.scroll}
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={refresh}
-            tintColor="#338DFF"
-            colors={['#338DFF']}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#338DFF" colors={['#338DFF']} />
         }
       >
         {/* ALLOCATION */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ALLOCATION</Text>
-          <View style={s.card}>
-            {loading ? (
-              <ActivityIndicator color="#338DFF" style={{ marginVertical: 40 }} />
-            ) : (
-              <DonutChart positions={positions} totalValue={totalValue} />
-            )}
-          </View>
+          {loading
+            ? <ActivityIndicator color="#338DFF" style={{ marginVertical: 40 }} />
+            : <DonutChart positions={positions} totalValue={totalValue} />
+          }
         </View>
+        
 
         {/* INCOME */}
         <View style={s.section}>
@@ -518,25 +541,22 @@ export default function PortfolioScreen() {
           </View>
         </View>
 
-        {/* PERFORMANCE — no card wrapper, line chart */}
+        {/* PERFORMANCE */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>PERFORMANCE</Text>
-          <View style={s.perfWrap}>
-            <PortfolioLineChart
-              positions={positions}
-              period={perfPeriod} onPeriodChange={setPerfPeriod}
-            />
-          </View>
+          <PortfolioAreaChart
+            positions={positions}
+            period={perfPeriod}
+            onPeriodChange={setPerfPeriod}
+          />
         </View>
-
-        {/* Period selector lives OUTSIDE chart, drives perfPeriod */}
-        {/* (moved inside PortfolioLineChart but needs to call setPerfPeriod in parent) */}
+        
 
         {/* ANALYTICS */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>ANALYTICS</Text>
 
-          {/* Overlap */}
+          {/* Overlap Analyzer */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('overlap')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#338DFF22' }]}>
@@ -551,6 +571,7 @@ export default function PortfolioScreen() {
               </View>
               <Ionicons name={expandedCard === 'overlap' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
+
             {expandedCard === 'overlap' && (
               <View style={s.expanded}>
                 {loadingOverlap ? (
@@ -564,15 +585,18 @@ export default function PortfolioScreen() {
                   <>
                     {pairs.map((pair) => {
                       const pairKey = pair.etf1 + pair.etf2;
+                      const isExpanded = expandedPair === pairKey;
                       return (
                         <View key={pairKey} style={s.pairBlock}>
+                          {/* Score row — tappable */}
                           <TouchableOpacity
                             style={s.pairHeader}
                             onPress={() => {
                               LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                              setExpandedPair(expandedPair === pairKey ? null : pairKey);
+                              setExpandedPair(isExpanded ? null : pairKey);
                             }}
                             activeOpacity={0.75}
+                            hitSlop={{ top: 8, bottom: 4, left: 8, right: 8 }}
                           >
                             <View style={s.pairLeft}>
                               <View style={s.chip}><Text style={s.chipText}>{pair.etf1}</Text></View>
@@ -584,11 +608,28 @@ export default function PortfolioScreen() {
                               <Text style={[s.pairLabel, { color: scoreColor(pair.score) }]}>{scoreLabel(pair.score)}</Text>
                             </View>
                           </TouchableOpacity>
+
+                          {/* Progress bar */}
                           <View style={s.barBg}>
                             <View style={[s.barFill, { width: `${pair.score}%` as any, backgroundColor: scoreColor(pair.score) }]} />
                           </View>
-                          <Text style={s.sharedCount}>{pair.sharedCount} shared holdings · tap to expand</Text>
-                          {expandedPair === pairKey && (
+
+                          {/* "tap to expand" row — also tappable */}
+                          <TouchableOpacity
+                            onPress={() => {
+                              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                              setExpandedPair(isExpanded ? null : pairKey);
+                            }}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 6, bottom: 6, left: 0, right: 0 }}
+                          >
+                            <Text style={s.sharedCount}>
+                              {pair.sharedCount} shared holdings · {isExpanded ? 'tap to collapse ▲' : 'tap to expand ▼'}
+                            </Text>
+                          </TouchableOpacity>
+
+                          {/* Expanded holdings table */}
+                          {isExpanded && (
                             <View style={s.table}>
                               <View style={s.tableHead}>
                                 <Text style={[s.tableCell, { flex: 2 }]}>Holding</Text>
@@ -610,6 +651,7 @@ export default function PortfolioScreen() {
                         </View>
                       );
                     })}
+
                     {overlappingHoldings.length > 0 && (
                       <View style={{ marginTop: 8 }}>
                         <Text style={[s.sectionTitle, { marginBottom: 8 }]}>IN MULTIPLE ETFs</Text>
@@ -628,6 +670,7 @@ export default function PortfolioScreen() {
                         ))}
                       </View>
                     )}
+
                     {pairs[0] && (
                       <View style={s.insight}>
                         <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
@@ -646,7 +689,7 @@ export default function PortfolioScreen() {
             )}
           </View>
 
-          {/* Sector */}
+          {/* Sector Exposure */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('sector')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#00C89622' }]}>
@@ -660,33 +703,42 @@ export default function PortfolioScreen() {
             </TouchableOpacity>
             {expandedCard === 'sector' && (
               <View style={s.expanded}>
-                {[
-                  { name: 'Technology', pct: 28.4, color: '#338DFF' },
-                  { name: 'Financials', pct: 18.2, color: '#00C896' },
-                  { name: 'Healthcare', pct: 12.7, color: '#A78BFA' },
-                  { name: 'Industrials', pct: 10.1, color: '#FF9F43' },
-                  { name: 'Consumer Disc.', pct: 9.3, color: '#FF5A5F' },
-                  { name: 'Energy', pct: 7.8, color: '#FFD93D' },
-                  { name: 'Other', pct: 13.5, color: '#4A6080' },
-                ].map((sec) => (
-                  <View key={sec.name} style={s.sectorRow}>
-                    <View style={[s.sectorDot, { backgroundColor: sec.color }]} />
-                    <Text style={s.sectorName}>{sec.name}</Text>
-                    <View style={s.barBg}>
-                      <View style={[s.barFill, { width: `${(sec.pct / 30) * 100}%` as any, backgroundColor: sec.color }]} />
-                    </View>
-                    <Text style={s.sectorPct}>{sec.pct}%</Text>
+                {sectorData.length === 0 ? (
+                  <View style={s.loadingRow}>
+                    <ActivityIndicator size="small" color="#00C896" />
+                    <Text style={s.loadingText}>Computing sector weights…</Text>
                   </View>
-                ))}
-                <View style={s.insight}>
-                  <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
-                  <Text style={s.insightText}>Technology is your largest sector at 28.4%.</Text>
-                </View>
+                ) : (
+                  <>
+                    {sectorData.map((sec) => (
+                      <View key={sec.name} style={s.sectorRow}>
+                        <View style={[s.sectorDot, { backgroundColor: sec.color }]} />
+                        <Text style={s.sectorName}>{sec.name}</Text>
+                        <View style={s.barBg}>
+                          <View style={[s.barFill, {
+                            width: `${Math.min((sec.pct / (sectorData[0]?.pct || 1)) * 100, 100)}%` as any,
+                            backgroundColor: sec.color,
+                          }]} />
+                        </View>
+                        <Text style={s.sectorPct}>{sec.pct}%</Text>
+                      </View>
+                    ))}
+                    {topSector && (
+                      <View style={s.insight}>
+                        <Ionicons name="bulb-outline" size={14} color="#FF9F43" />
+                        <Text style={s.insightText}>
+                          {topSector.name} is your largest sector at {topSector.pct}%.
+                          {topSector.pct > 35 ? ' Consider diversifying to reduce concentration.' : ' Sector allocation looks balanced.'}
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                )}
               </View>
             )}
           </View>
 
-          {/* Health Score — dynamic */}
+          {/* Health Score */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('health')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#FF9F4322' }]}>
@@ -726,7 +778,7 @@ export default function PortfolioScreen() {
             )}
           </View>
 
-          {/* Dividend Forecast — real yields */}
+          {/* Dividend Forecast */}
           <View style={s.card}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('dividend')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#A78BFA22' }]}>
@@ -743,16 +795,12 @@ export default function PortfolioScreen() {
                 <View style={s.divSummary}>
                   <View style={s.divStat}>
                     <Text style={s.divStatLabel}>Monthly</Text>
-                    <Text style={s.divStatValue}>
-                      {monthlyIncome > 0 ? `$${monthlyIncome.toFixed(2)}` : '—'}
-                    </Text>
+                    <Text style={s.divStatValue}>{monthlyIncome > 0 ? `$${monthlyIncome.toFixed(2)}` : '—'}</Text>
                   </View>
                   <View style={s.divDivider} />
                   <View style={s.divStat}>
                     <Text style={s.divStatLabel}>Annual</Text>
-                    <Text style={s.divStatValue}>
-                      {annualIncome > 0 ? `$${annualIncome.toFixed(2)}` : '—'}
-                    </Text>
+                    <Text style={s.divStatValue}>{annualIncome > 0 ? `$${annualIncome.toFixed(2)}` : '—'}</Text>
                   </View>
                   <View style={s.divDivider} />
                   <View style={s.divStat}>
@@ -765,15 +813,13 @@ export default function PortfolioScreen() {
                 {positions.map((p) => {
                   const y = getYield(p.ticker);
                   const annual = p.value * y;
-                  // Determine frequency from dividend history length
                   const isMonthly = ['JEPI', 'JEPQ', 'QQQI'].includes(p.ticker);
-                  const freq = isMonthly ? 'Monthly' : 'Quarterly';
                   return (
                     <View key={p.ticker} style={s.divRow}>
                       <Text style={s.divTicker}>{p.ticker}</Text>
                       <Text style={s.divAnnual}>{annual > 0 ? `$${annual.toFixed(0)}/yr` : '—'}</Text>
                       <Text style={s.divYield}>{y > 0 ? `${(y * 100).toFixed(2)}%` : '—'}</Text>
-                      <Text style={s.divFreq}>{freq}</Text>
+                      <Text style={s.divFreq}>{isMonthly ? 'Monthly' : 'Quarterly'}</Text>
                     </View>
                   );
                 })}
@@ -800,8 +846,7 @@ const s = StyleSheet.create({
   scroll: { paddingBottom: 100 },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16,
-    backgroundColor: '#0B0F19',
+    paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16, backgroundColor: '#0B0F19',
   },
   headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -811,7 +856,6 @@ const s = StyleSheet.create({
   section: { paddingHorizontal: 20, marginBottom: 20 },
   sectionTitle: { fontSize: 10, color: '#4A6080', letterSpacing: 1.5, marginBottom: 10 },
   card: { backgroundColor: '#141A26', borderRadius: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
-  perfWrap: { paddingHorizontal: 0 },
   incomeRow: { flexDirection: 'row', padding: 20 },
   incomeStat: { flex: 1, alignItems: 'center' },
   incomeLabel: { fontSize: 11, color: '#4A6080', letterSpacing: 1, marginBottom: 6 },
@@ -837,9 +881,9 @@ const s = StyleSheet.create({
   pairRight: { alignItems: 'flex-end' },
   pairScore: { fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
   pairLabel: { fontSize: 10, fontWeight: '600' },
-  barBg: { height: 4, backgroundColor: '#1E2A3A', borderRadius: 2, overflow: 'hidden', marginBottom: 6 },
+  barBg: { flex: 1, height: 4, backgroundColor: '#1E2A3A', borderRadius: 2, overflow: 'hidden', marginBottom: 6 },
   barFill: { height: '100%', borderRadius: 2 },
-  sharedCount: { fontSize: 11, color: '#4A6080', marginBottom: 2 },
+  sharedCount: { fontSize: 11, color: '#4A6080', marginBottom: 2, paddingVertical: 4 },
   table: { marginTop: 10, backgroundColor: '#0B0F19', borderRadius: 10, padding: 12 },
   tableHead: { flexDirection: 'row', marginBottom: 8 },
   tableCell: { flex: 1, fontSize: 10, color: '#4A6080', letterSpacing: 0.5 },
@@ -857,7 +901,7 @@ const s = StyleSheet.create({
   insightText: { flex: 1, fontSize: 12, color: '#C8D8F0', lineHeight: 18 },
   sectorRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   sectorDot: { width: 8, height: 8, borderRadius: 4 },
-  sectorName: { width: 110, fontSize: 12, color: '#C8D8F0' },
+  sectorName: { width: 120, fontSize: 12, color: '#C8D8F0' },
   sectorPct: { width: 40, fontSize: 12, color: '#4A6080', textAlign: 'right' },
   healthPill: { backgroundColor: '#00C89622', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, marginRight: 4 },
   healthPillText: { fontSize: 16, fontWeight: '700' },
