@@ -2,34 +2,23 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Dimensions, ScrollView, StatusBar,
-  StyleSheet, Text, TouchableOpacity, View,
+    ActivityIndicator, Dimensions, ScrollView, StatusBar,
+    StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import Svg, { Defs, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import {
-  ETFSummary,
-  getETFDividends, getETFHistory,
-  getETFPrice, getETFSummary, getETFTopHoldings
+    StockSummary, formatMarketCap, formatVolume,
+    getETFDividends, getETFHistory, getETFPrice, getStockSummary,
 } from '../services/api';
 
-const TABS = ['Overview', 'Holdings', 'Dividends', 'Alerts'];
+const TABS = ['Overview', 'Financials', 'Dividends', 'Alerts'];
 const CHART_PERIODS = ['1D', '1W', '1M', '3M', '1Y', '5Y'];
 const SCREEN_W = Dimensions.get('window').width;
 const CHART_W = SCREEN_W - 32;
 const CHART_H = 160;
 
-const ETF_NAMES: Record<string, string> = {
-  SCHD: 'Schwab US Dividend Equity ETF', VTI: 'Vanguard Total Stock Market ETF',
-  QQQM: 'Invesco NASDAQ 100 ETF', JEPI: 'JPMorgan Equity Premium Income ETF',
-  JEPQ: 'JPMorgan Nasdaq Equity Premium Income ETF', SPY: 'SPDR S&P 500 ETF Trust',
-  VOO: 'Vanguard S&P 500 ETF', VXUS: 'Vanguard Total International ETF',
-  QQQI: 'NEOS NASDAQ-100 High Income ETF', QQQ: 'Invesco QQQ Trust',
-  IVV: 'iShares Core S&P 500 ETF', GLD: 'SPDR Gold Shares',
-  ARKK: 'ARK Innovation ETF', TLT: 'iShares 20+ Year Treasury Bond ETF',
-};
-
 // ── Area Chart ────────────────────────────────────────────────
-function DetailAreaChart({ ticker, period }: { ticker: string; period: string }) {
+function StockAreaChart({ ticker, period }: { ticker: string; period: string }) {
   const [points, setPoints] = useState<{ x: number; y: number }[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -76,136 +65,26 @@ function DetailAreaChart({ ticker, period }: { ticker: string; period: string })
   return (
     <Svg width={CHART_W} height={CHART_H}>
       <Defs>
-        <LinearGradient id="etfGrad" x1="0" y1="0" x2="0" y2="1">
+        <LinearGradient id="stockGrad" x1="0" y1="0" x2="0" y2="1">
           <Stop offset="0%" stopColor={lineColor} stopOpacity="0.3" />
           <Stop offset="100%" stopColor={lineColor} stopOpacity="0.0" />
         </LinearGradient>
       </Defs>
-      <Path d={areaPath} fill="url(#etfGrad)" />
+      <Path d={areaPath} fill="url(#stockGrad)" />
       <Path d={linePath} fill="none" stroke={lineColor} strokeWidth={2}
         strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
 
-// ── Dividend Bar Chart ────────────────────────────────────────
-function DividendBarChart({ dividends }: { dividends: { date: string; amount: number }[] }) {
-  if (dividends.length === 0) return null;
-
-  const recent = [...dividends].reverse().slice(0, 8);
-  const maxAmt = Math.max(...recent.map(d => d.amount));
-  const minAmt = Math.min(...recent.map(d => d.amount));
-
-  const PADDING = 8;
-  const Y_AXIS_W = 44;
-  const BAR_AREA_W = SCREEN_W - 64 - Y_AXIS_W - PADDING * 2;
-  const BAR_H = 100;
-  const LABEL_H = 20;
-  const TOTAL_H = BAR_H + LABEL_H;
-  const BAR_W = 8;
-  const BAR_SPACING = (BAR_AREA_W - BAR_W * recent.length) / (recent.length - 1 || 1);
-
-  // Y axis labels: 3 levels
-  const yLabels = [maxAmt, (maxAmt + minAmt) / 2, minAmt].map(v => ({
-    value: `$${v.toFixed(3)}`,
-    y: maxAmt > minAmt ? ((maxAmt - v) / (maxAmt - minAmt)) * BAR_H : BAR_H / 2,
-  }));
-
-  return (
-    <View style={[dbc.wrap, { padding: PADDING }]}>
-      <View style={{ flexDirection: 'row' }}>
-        {/* Y axis */}
-        <Svg width={Y_AXIS_W} height={TOTAL_H}>
-          {yLabels.map((l, i) => (
-            <SvgText
-              key={i}
-              x={Y_AXIS_W - 4}
-              y={l.y + 4}
-              fontSize={8}
-              fill="#4A6080"
-              textAnchor="end"
-            >
-              {l.value}
-            </SvgText>
-          ))}
-          {/* Horizontal guide lines */}
-          {yLabels.map((l, i) => (
-            <Line
-              key={`line${i}`}
-              x1={Y_AXIS_W - 2} y1={l.y}
-              x2={Y_AXIS_W + BAR_AREA_W + PADDING} y2={l.y}
-              stroke="#1E2A3A"
-              strokeWidth={0.5}
-              strokeDasharray="3,3"
-            />
-          ))}
-        </Svg>
-
-        {/* Bars + x labels */}
-        <Svg width={BAR_AREA_W + PADDING} height={TOTAL_H}>
-          {recent.map((d, i) => {
-            const barHeight = maxAmt > 0
-              ? Math.max(4, (d.amount / maxAmt) * BAR_H)
-              : 4;
-            const x = i * (BAR_W + BAR_SPACING);
-            const y = BAR_H - barHeight;
-            const labelParts = d.date.split(' ');
-            const label = labelParts.length >= 2
-              ? `${labelParts[0].slice(0, 3)} ${labelParts[2]?.slice(2) ?? ''}`
-              : d.date.slice(0, 6);
-            return (
-              <React.Fragment key={i}>
-                <Rect
-                  x={x} y={y}
-                  width={BAR_W} height={barHeight}
-                  rx={2} fill="#00C896" opacity={0.85}
-                />
-                <SvgText
-                  x={x + BAR_W / 2}
-                  y={BAR_H + 14}
-                  fontSize={7}
-                  fill="#4A6080"
-                  textAnchor="middle"
-                >
-                  {label}
-                </SvgText>
-              </React.Fragment>
-            );
-          })}
-        </Svg>
-      </View>
-    </View>
-  );
-}
-
-const dbc = StyleSheet.create({
-  wrap: {
-    backgroundColor: '#141A26',
-    borderRadius: 14,
-    marginHorizontal: 16,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.06)',
-    marginBottom: 16,
-  },
-});
-
-// ── Format AUM ────────────────────────────────────────────────
-function formatAUM(v: number): string {
-  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
-  return v > 0 ? `$${v.toLocaleString()}` : '—';
-}
-
 // ── Main Screen ───────────────────────────────────────────────
-export default function ETFDetailScreen() {
+export default function StockDetailScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState('Overview');
   const [chartPeriod, setChartPeriod] = useState('1Y');
-  const [summary, setSummary] = useState<ETFSummary | null>(null);
-  const [holdings, setHoldings] = useState<{ symbol: string; name: string; weight: number }[]>([]);
+  const [summary, setSummary] = useState<StockSummary | null>(null);
   const [dividends, setDividends] = useState<{ date: string; amount: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -213,15 +92,12 @@ export default function ETFDetailScreen() {
   useEffect(() => {
     if (!ticker) return;
 
-    // Initial full load
     async function load() {
-      const [s, h, d] = await Promise.all([
-        getETFSummary(ticker),
-        getETFTopHoldings(ticker),
+      const [s, d] = await Promise.all([
+        getStockSummary(ticker),
         getETFDividends(ticker),
       ]);
       setSummary(s);
-      setHoldings(h);
       setDividends(d);
       setLoading(false);
     }
@@ -238,6 +114,7 @@ export default function ETFDetailScreen() {
           changePct: p.changesPercentage,
           yearHigh: p.yearHigh || prev.yearHigh,
           yearLow: p.yearLow || prev.yearLow,
+          avgVolume: p.avgVolume || prev.avgVolume,
         } : prev);
       }
     }, 10000);
@@ -247,11 +124,14 @@ export default function ETFDetailScreen() {
     };
   }, [ticker]);
 
-  const etfName = summary?.name || ETF_NAMES[ticker] || ticker + ' ETF';
   const isPositive = (summary?.changePct ?? 0) >= 0;
   const changeColor = isPositive ? '#00C896' : '#FF5A5F';
-  const latestDiv = dividends[0];
-  const getFrequency = () => ['JEPI', 'JEPQ', 'QQQI'].includes(ticker) ? 'Monthly' : 'Quarterly';
+  const paysDividends = dividends.length > 0 || (summary?.dividendYield ?? 0) > 0;
+
+  const formatPE = (v: number) => v > 0 ? v.toFixed(1) + 'x' : '—';
+  const formatEPS = (v: number) => v !== 0 ? `$${v.toFixed(2)}` : '—';
+  const formatBeta = (v: number) => v > 0 ? v.toFixed(2) : '—';
+  const formatYield = (v: number) => v > 0 ? `${(v * 100).toFixed(2)}%` : '—';
 
   return (
     <View style={s.container}>
@@ -259,13 +139,17 @@ export default function ETFDetailScreen() {
 
       {/* STATIC HEADER */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          onPress={() => router.back()} style={s.backBtn}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
           <Ionicons name="chevron-back" size={24} color="#338DFF" />
         </TouchableOpacity>
         <View style={s.headerCenter}>
           <Text style={s.headerTicker}>{ticker}</Text>
-          <Text style={s.headerName} numberOfLines={1}>{etfName}</Text>
+          {summary?.name && (
+            <Text style={s.headerName} numberOfLines={1}>{summary.name}</Text>
+          )}
         </View>
         <TouchableOpacity style={s.starBtn}>
           <Ionicons name="star-outline" size={22} color="#FF9F43" />
@@ -278,26 +162,40 @@ export default function ETFDetailScreen() {
           <ActivityIndicator color="#338DFF" style={{ marginVertical: 16 }} />
         ) : (
           <>
-            <Text style={s.price}>${summary?.price?.toFixed(2) ?? '—'}</Text>
-            <Text style={[s.change, { color: changeColor }]}>
-              {isPositive ? '+' : ''}{summary?.change?.toFixed(2) ?? '—'}{' '}
-              ({isPositive ? '+' : ''}{summary?.changePct?.toFixed(2) ?? '—'}%) Today
+            <Text style={s.price}>
+              ${summary?.price?.toLocaleString('en-US', {
+                minimumFractionDigits: 2, maximumFractionDigits: 2,
+              }) ?? '—'}
             </Text>
+            <View style={s.changeRow}>
+              <Text style={[s.change, { color: changeColor }]}>
+                {isPositive ? '+' : ''}{summary?.change?.toFixed(2) ?? '—'}{' '}
+                ({isPositive ? '+' : ''}{summary?.changePct?.toFixed(2) ?? '—'}%) Today
+              </Text>
+              {summary?.sector ? (
+                <View style={s.sectorBadge}>
+                  <Text style={s.sectorText}>{summary.sector}</Text>
+                </View>
+              ) : null}
+            </View>
           </>
         )}
       </View>
 
       {/* TAB BAR */}
       <View style={s.tabRow}>
-        {TABS.map((tab) => (
-          <TouchableOpacity
-            key={tab}
-            style={[s.tab, activeTab === tab && s.tabActive]}
-            onPress={() => setActiveTab(tab)}
-          >
-            <Text style={[s.tabText, activeTab === tab && s.tabTextActive]}>{tab}</Text>
-          </TouchableOpacity>
-        ))}
+        {TABS.map((tab) => {
+          if (tab === 'Dividends' && !paysDividends && !loading) return null;
+          return (
+            <TouchableOpacity
+              key={tab}
+              style={[s.tab, activeTab === tab && s.tabActive]}
+              onPress={() => setActiveTab(tab)}
+            >
+              <Text style={[s.tabText, activeTab === tab && s.tabTextActive]}>{tab}</Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
@@ -306,7 +204,7 @@ export default function ETFDetailScreen() {
         {activeTab === 'Overview' && (
           <View>
             <View style={s.chartWrap}>
-              <DetailAreaChart ticker={ticker} period={chartPeriod} />
+              <StockAreaChart ticker={ticker} period={chartPeriod} />
             </View>
             <View style={s.periodRow}>
               {CHART_PERIODS.map((p) => (
@@ -319,14 +217,18 @@ export default function ETFDetailScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+
+            {/* Stats grid */}
             <View style={s.statsGrid}>
               {[
-                { label: 'Dividend Yield', value: summary?.dividendYield ? `${(summary.dividendYield * 100).toFixed(2)}%` : '—' },
-                { label: 'Expense Ratio', value: summary?.expenseRatio ? `${(summary.expenseRatio * 100).toFixed(2)}%` : '—' },
-                { label: 'AUM', value: formatAUM(summary?.aum ?? 0) },
-                { label: 'Inception Date', value: summary?.inceptionDate || '—' },
+                { label: 'Market Cap', value: formatMarketCap(summary?.marketCap ?? 0) },
+                { label: 'P/E Ratio', value: formatPE(summary?.peRatio ?? 0) },
+                { label: 'EPS', value: formatEPS(summary?.eps ?? 0) },
+                { label: 'Beta', value: formatBeta(summary?.beta ?? 0) },
                 { label: '52W High', value: summary?.yearHigh ? `$${summary.yearHigh.toFixed(2)}` : '—' },
                 { label: '52W Low', value: summary?.yearLow ? `$${summary.yearLow.toFixed(2)}` : '—' },
+                { label: 'Avg Volume', value: formatVolume(summary?.avgVolume ?? 0) },
+                { label: 'Div. Yield', value: formatYield(summary?.dividendYield ?? 0) },
               ].map((stat) => (
                 <View key={stat.label} style={s.statCard}>
                   <Text style={s.statLabel}>{stat.label}</Text>
@@ -334,36 +236,44 @@ export default function ETFDetailScreen() {
                 </View>
               ))}
             </View>
+
+            {summary?.industry ? (
+              <View style={s.industryRow}>
+                <Ionicons name="business-outline" size={13} color="#4A6080" />
+                <Text style={s.industryText}>{summary.industry}</Text>
+              </View>
+            ) : null}
             <View style={{ height: 24 }} />
           </View>
         )}
 
-        {/* HOLDINGS */}
-        {activeTab === 'Holdings' && (
+        {/* FINANCIALS */}
+        {activeTab === 'Financials' && (
           <View>
-            <Text style={s.sectionLabel}>
-              TOP HOLDINGS · {new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
-            </Text>
-            {loading ? (
-              <ActivityIndicator color="#338DFF" style={{ marginVertical: 20 }} />
-            ) : holdings.length === 0 ? (
-              <Text style={s.emptyText}>No holdings data available.</Text>
-            ) : (
-              holdings.map((h) => (
-                <View key={h.symbol} style={s.holdingRow}>
-                  <View style={s.holdingIcon}>
-                    <Text style={s.holdingIconText}>{h.symbol.slice(0, 4)}</Text>
-                  </View>
-                  <Text style={s.holdingName}>{h.name}</Text>
-                  <Text style={s.holdingWeight}>{h.weight.toFixed(2)}%</Text>
+            <Text style={s.sectionLabel}>KEY METRICS</Text>
+            <View style={s.metricsCard}>
+              {[
+                { label: 'Market Capitalization', value: formatMarketCap(summary?.marketCap ?? 0) },
+                { label: 'Price / Earnings (P/E)', value: formatPE(summary?.peRatio ?? 0) },
+                { label: 'Earnings Per Share', value: formatEPS(summary?.eps ?? 0) },
+                { label: 'Beta (Volatility)', value: formatBeta(summary?.beta ?? 0) },
+                { label: 'Dividend Yield', value: formatYield(summary?.dividendYield ?? 0) },
+                { label: 'Sector', value: summary?.sector || '—' },
+                { label: 'Industry', value: summary?.industry || '—' },
+              ].map((item, i, arr) => (
+                <View key={item.label}
+                  style={[s.metricRow, i === arr.length - 1 && { borderBottomWidth: 0 }]}>
+                  <Text style={s.metricLabel}>{item.label}</Text>
+                  <Text style={s.metricValue}>{item.value}</Text>
                 </View>
-              ))
-            )}
-            {holdings.length > 0 && (
-              <TouchableOpacity style={s.viewAllBtn}>
-                <Text style={s.viewAllText}>View All Holdings</Text>
-              </TouchableOpacity>
-            )}
+              ))}
+            </View>
+            <View style={s.infoCard}>
+              <Ionicons name="information-circle-outline" size={14} color="#4A6080" />
+              <Text style={s.infoText}>
+                Full earnings history and income statements coming in a future update.
+              </Text>
+            </View>
             <View style={{ height: 24 }} />
           </View>
         )}
@@ -373,48 +283,24 @@ export default function ETFDetailScreen() {
           <View>
             <View style={s.divHero}>
               <View style={s.divStat}>
-                <Text style={s.divStatLabel}>Dividend Yield</Text>
-                <Text style={s.divStatValue}>
-                  {summary?.dividendYield ? `${(summary.dividendYield * 100).toFixed(2)}%` : '—'}
-                </Text>
+                <Text style={s.divStatLabel}>Annual Yield</Text>
+                <Text style={s.divStatValue}>{formatYield(summary?.dividendYield ?? 0)}</Text>
               </View>
               <View style={s.divDivider} />
               <View style={s.divStat}>
-                <Text style={s.divStatLabel}>Distribution</Text>
-                <Text style={s.divStatValue}>{getFrequency()}</Text>
+                <Text style={s.divStatLabel}>Frequency</Text>
+                <Text style={s.divStatValue}>Quarterly</Text>
               </View>
             </View>
 
-            {latestDiv && (
+            {dividends.length > 0 && (
               <>
-                <Text style={s.sectionLabel}>UPCOMING DIVIDEND</Text>
-                <View style={s.upcomingCard}>
-                  <View style={s.upcomingRow}>
-                    <Text style={s.upcomingLabel}>Ex-Dividend Date</Text>
-                    <Text style={s.upcomingValue}>{latestDiv.date}</Text>
-                  </View>
-                  <View style={[s.upcomingRow, { borderBottomWidth: 0 }]}>
-                    <Text style={s.upcomingLabel}>Amount</Text>
-                    <Text style={[s.upcomingValue, { color: '#00C896' }]}>
-                      ${latestDiv.amount.toFixed(4)}
-                    </Text>
-                  </View>
-                </View>
-              </>
-            )}
-
-            <Text style={s.sectionLabel}>DIVIDEND HISTORY</Text>
-            {loading ? (
-              <ActivityIndicator color="#338DFF" style={{ marginHorizontal: 16 }} />
-            ) : dividends.length === 0 ? (
-              <Text style={s.emptyText}>No dividend history available.</Text>
-            ) : (
-              <>
-                <DividendBarChart dividends={dividends} />
+                <Text style={s.sectionLabel}>RECENT DIVIDENDS</Text>
                 <View style={s.divTable}>
                   {dividends.slice(0, 8).map((d, i) => (
-                    <View key={i} style={[s.divTableRow,
-                      i === Math.min(dividends.length, 8) - 1 && { borderBottomWidth: 0 }]}>
+                    <View key={i}
+                      style={[s.divTableRow,
+                        i === Math.min(dividends.length, 8) - 1 && { borderBottomWidth: 0 }]}>
                       <Text style={s.divTableDate}>{d.date}</Text>
                       <Text style={[s.divTableAmt, { color: '#00C896' }]}>
                         ${d.amount.toFixed(4)}
@@ -432,7 +318,7 @@ export default function ETFDetailScreen() {
         {activeTab === 'Alerts' && (
           <View>
             <Text style={s.sectionLabel}>ALERT SETTINGS FOR {ticker}</Text>
-            {['Holdings Change', 'Dividend Change', 'Price Change', 'Yield Change'].map((alert) => (
+            {['Price Change', 'Earnings Release', 'Dividend Change', 'Volume Spike'].map((alert) => (
               <View key={alert} style={s.alertRow}>
                 <Text style={s.alertText}>{alert}</Text>
                 <View style={s.alertToggle}>
@@ -462,8 +348,11 @@ const s = StyleSheet.create({
   headerName: { fontSize: 11, color: '#4A6080', marginTop: 1 },
   starBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   priceHero: { paddingHorizontal: 16, paddingBottom: 12 },
-  price: { fontSize: 34, fontWeight: '700', color: '#E8EEF8', marginBottom: 4, fontVariant: ['tabular-nums'] },
+  price: { fontSize: 34, fontWeight: '700', color: '#E8EEF8', marginBottom: 6, fontVariant: ['tabular-nums'] },
+  changeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   change: { fontSize: 14, fontWeight: '500' },
+  sectorBadge: { backgroundColor: '#338DFF18', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 0.5, borderColor: '#338DFF33' },
+  sectorText: { fontSize: 10, color: '#338DFF', fontWeight: '600' },
   tabRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 16 },
   tab: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: 'transparent', marginRight: 4 },
   tabActive: { borderBottomColor: '#338DFF' },
@@ -480,24 +369,20 @@ const s = StyleSheet.create({
   statCard: { width: '47%', backgroundColor: '#141A26', borderRadius: 12, padding: 14, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
   statLabel: { fontSize: 10, color: '#3A5070', letterSpacing: 0.8, marginBottom: 6 },
   statValue: { fontSize: 15, fontWeight: '600', color: '#E8EEF8' },
+  industryRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, marginTop: 12 },
+  industryText: { fontSize: 12, color: '#4A6080' },
   sectionLabel: { fontSize: 10, color: '#4A6A9A', letterSpacing: 1.5, marginBottom: 12, marginTop: 8, paddingHorizontal: 16 },
-  emptyText: { fontSize: 13, color: '#4A6080', paddingHorizontal: 16 },
-  holdingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#141A26', borderRadius: 10, padding: 12, marginHorizontal: 16, marginBottom: 8, gap: 12, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
-  holdingIcon: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#0D1830', alignItems: 'center', justifyContent: 'center', borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)' },
-  holdingIconText: { fontSize: 8, color: '#338DFF', fontWeight: '700' },
-  holdingName: { flex: 1, fontSize: 13, color: '#C8D8F0' },
-  holdingWeight: { fontSize: 13, color: '#E8EEF8', fontWeight: '600', fontVariant: ['tabular-nums'] },
-  viewAllBtn: { backgroundColor: 'rgba(51,141,255,0.1)', borderRadius: 10, padding: 14, alignItems: 'center', marginHorizontal: 16, marginTop: 4, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)' },
-  viewAllText: { color: '#338DFF', fontSize: 14, fontWeight: '500' },
+  metricsCard: { backgroundColor: '#141A26', borderRadius: 14, marginHorizontal: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
+  metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)' },
+  metricLabel: { fontSize: 13, color: '#4A6080' },
+  metricValue: { fontSize: 13, color: '#E8EEF8', fontWeight: '600' },
+  infoCard: { flexDirection: 'row', gap: 8, alignItems: 'flex-start', backgroundColor: '#1E2A3A', borderRadius: 10, marginHorizontal: 16, marginTop: 12, padding: 12 },
+  infoText: { flex: 1, fontSize: 12, color: '#4A6080', lineHeight: 18 },
   divHero: { flexDirection: 'row', backgroundColor: '#141A26', borderRadius: 14, padding: 16, marginHorizontal: 16, marginBottom: 16, borderWidth: 0.5, borderColor: 'rgba(0,200,150,0.2)' },
   divStat: { flex: 1, alignItems: 'center' },
   divDivider: { width: 0.5, backgroundColor: 'rgba(255,255,255,0.06)' },
   divStatLabel: { fontSize: 10, color: '#3A5070', letterSpacing: 0.8, marginBottom: 6 },
   divStatValue: { fontSize: 18, fontWeight: '600', color: '#00C896' },
-  upcomingCard: { backgroundColor: '#141A26', borderRadius: 14, padding: 16, marginHorizontal: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16 },
-  upcomingRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)' },
-  upcomingLabel: { fontSize: 13, color: '#4A6080' },
-  upcomingValue: { fontSize: 13, color: '#E8EEF8', fontWeight: '500' },
   divTable: { backgroundColor: '#141A26', borderRadius: 14, marginHorizontal: 16, borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
   divTableRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.04)' },
   divTableDate: { fontSize: 13, color: '#C8D8F0' },

@@ -486,11 +486,7 @@ export default function PortfolioScreen() {
       <View style={s.header}>
         <Text style={s.headerTitle}>Portfolio</Text>
         <View style={s.headerRight}>
-          {lastUpdated && (
-            <Text style={s.lastUpdated}>
-              {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </Text>
-          )}
+          
           <View style={s.premiumBadge}>
             <Ionicons name="star" size={10} color="#FFD93D" />
             <Text style={s.premiumText}>Premium</Text>
@@ -843,14 +839,14 @@ export default function PortfolioScreen() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B0F19' },
-  scroll: { paddingBottom: 100 },
+  scroll: { paddingBottom: 8 },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16, backgroundColor: '#0B0F19',
   },
   headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  lastUpdated: { fontSize: 10, color: '#4A6080' },
+  
   premiumBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFD93D22', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
   premiumText: { fontSize: 11, fontWeight: '700', color: '#FFD93D' },
   section: { paddingHorizontal: 20, marginBottom: 20 },

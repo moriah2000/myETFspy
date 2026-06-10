@@ -1,7 +1,7 @@
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
-  RefreshControl, ScrollView, StyleSheet,
+  RefreshControl, ScrollView, StatusBar, StyleSheet,
   Text, TouchableOpacity, View,
 } from 'react-native';
 
@@ -18,37 +18,17 @@ export default function AlertsScreen() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [refreshing, setRefreshing] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      setActiveFilter('All');
-    }, [])
-  );
-
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1000);
-  }, []);
+  useFocusEffect(useCallback(() => { setActiveFilter('All'); }, []));
 
   const filtered = activeFilter === 'All'
     ? ALL_ALERTS
-    : ALL_ALERTS.filter((a) =>
-        a.type.toLowerCase().includes(activeFilter.toLowerCase())
-      );
+    : ALL_ALERTS.filter((a) => a.type.toLowerCase().includes(activeFilter.toLowerCase()));
 
   return (
-    <ScrollView
-      style={styles.container}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor="#338DFF"
-          colors={['#338DFF']}
-        />
-      }
-    >
-      {/* Header */}
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" />
+
+      {/* STATIC HEADER */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Alerts</Text>
         <TouchableOpacity style={styles.settingsBtn}>
@@ -56,51 +36,68 @@ export default function AlertsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Filter Tabs */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-        <View style={styles.filterRow}>
-          {FILTER_TABS.map((f) => (
-            <TouchableOpacity
-              key={f}
-              style={[styles.filterTab, activeFilter === f && styles.filterTabActive]}
-              onPress={() => setActiveFilter(f)}
-            >
-              <Text style={[styles.filterTabText, activeFilter === f && styles.filterTabTextActive]}>{f}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </ScrollView>
-
-      {/* Alert List */}
-      <View style={styles.list}>
-        {filtered.map((alert) => (
-          <View key={alert.id} style={styles.alertRow}>
-            <View style={styles.alertLeft}>
-              <View style={[styles.alertDot, { backgroundColor: alert.color }]} />
-            </View>
-            <View style={styles.alertContent}>
-              <View style={styles.alertHeader}>
-                <Text style={styles.alertTicker}>{alert.ticker}</Text>
-                <Text style={styles.alertType}>{alert.type}</Text>
-              </View>
-              <Text style={styles.alertMessage}>{alert.message}</Text>
-              <Text style={styles.alertTime}>{alert.time}</Text>
-            </View>
+      <ScrollView
+        style={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { setRefreshing(true); setTimeout(() => setRefreshing(false), 1000); }}
+            tintColor="#338DFF"
+            colors={['#338DFF']}
+          />
+        }
+      >
+        {/* Filter Tabs */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+          <View style={styles.filterRow}>
+            {FILTER_TABS.map((f) => (
+              <TouchableOpacity
+                key={f}
+                style={[styles.filterTab, activeFilter === f && styles.filterTabActive]}
+                onPress={() => setActiveFilter(f)}
+              >
+                <Text style={[styles.filterTabText, activeFilter === f && styles.filterTabTextActive]}>{f}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        ))}
-        {filtered.length === 0 && (
-          <Text style={styles.emptyText}>No alerts for this filter.</Text>
-        )}
-      </View>
+        </ScrollView>
 
-      <View style={{ height: 100 }} />
-    </ScrollView>
+        {/* Alert List */}
+        <View style={styles.list}>
+          {filtered.map((alert) => (
+            <View key={alert.id} style={styles.alertRow}>
+              <View style={styles.alertLeft}>
+                <View style={[styles.alertDot, { backgroundColor: alert.color }]} />
+              </View>
+              <View style={styles.alertContent}>
+                <View style={styles.alertHeader}>
+                  <Text style={styles.alertTicker}>{alert.ticker}</Text>
+                  <Text style={styles.alertType}>{alert.type}</Text>
+                </View>
+                <Text style={styles.alertMessage}>{alert.message}</Text>
+                <Text style={styles.alertTime}>{alert.time}</Text>
+              </View>
+            </View>
+          ))}
+          {filtered.length === 0 && (
+            <Text style={styles.emptyText}>No alerts for this filter.</Text>
+          )}
+        </View>
+
+        <View style={{ height: 8 }} />
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0B0F19', padding: 16 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 60, marginBottom: 16 },
+  container: { flex: 1, backgroundColor: '#0B0F19' },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16, backgroundColor: '#0B0F19',
+  },
+  scroll: { flex: 1, paddingHorizontal: 20 },
   headerTitle: { fontSize: 24, fontWeight: '700', color: '#E8EEF8' },
   settingsBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#141A26', justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.06)' },
   settingsText: { fontSize: 16 },
