@@ -110,8 +110,8 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* YOUR ETFs */}
-        <Text style={styles.sectionTitle}>YOUR ETFs</Text>
+        {/* YOUR ASSETS */}
+        <Text style={styles.sectionTitle}>YOUR ASSETS</Text>
         <View style={styles.card}>
           {(loading ? [] : positions).map((etf) => (
             <View key={etf.ticker} style={styles.etfRow}>

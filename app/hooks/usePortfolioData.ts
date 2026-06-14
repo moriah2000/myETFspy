@@ -41,9 +41,13 @@ export function usePortfolioData() {
         AsyncStorage.getItem('userETFs'),
         AsyncStorage.getItem('userHoldings'),
       ]);
-      const tickers: string[] = etfsRaw
-        ? JSON.parse(etfsRaw)
-        : ['SCHD', 'VTI', 'QQQM', 'JEPI'];
+      const tickers: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
+      if (tickers.length === 0) {
+        setPositions([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+}
       const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
       const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
       const data: ETFPosition[] = tickers.map((ticker, i) => {
@@ -59,7 +63,7 @@ export function usePortfolioData() {
           qty,
           avgCost,
           value: qty > 0 ? qty * price : 0,
-          color: ETF_COLORS[ticker] || '#338DFF',
+          color: ETF_COLORS[ticker] || ['#338DFF','#00C896','#FF9F43','#A78BFA','#FF5A5F','#66AFFF','#FFD93D','#E879F9','#4FC3F7'][i % 9],
         };
       });
       setPositions(data);

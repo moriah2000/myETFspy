@@ -308,15 +308,6 @@ export default function WatchlistScreen() {
           >
             <Ionicons name="add" size={20} color="#338DFF" />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => {
-              setShowSearch(true);
-              setTimeout(() => searchInputRef.current?.focus(), 100);
-            }}
-          >
-            <Ionicons name="search" size={18} color="#C8D8F0" />
-          </TouchableOpacity>
         </View>
       </View>
 
