@@ -202,10 +202,11 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
   const [purchaseDate, setPurchaseDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [isExisting, setIsExisting] = useState(false);
+  const [transactionType, setTransactionType] = useState<'BUY' | 'SELL'>('BUY');
   const { addTransaction } = usePortfolioTransactions();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
-    if (visible) { setStep('search'); setQuery(''); setResults([]); setSelected(null); setQty(''); setAvgCost(''); setPurchaseDate(''); setIsExisting(false); }
+    if (visible) { setStep('search'); setQuery(''); setResults([]); setSelected(null); setQty(''); setAvgCost(''); setPurchaseDate(''); setIsExisting(false); setTransactionType('BUY'); }
   }, [visible]);
 
   useEffect(() => {
@@ -235,27 +236,24 @@ async function handleSave() {
   if (isNaN(qtyNum) || qtyNum <= 0) return;
   setSaving(true);
   try {
-    // Keep userETFs updated so price fetching still works
     const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
     const etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
     if (!etfs.includes(selected.ticker)) {
       etfs.push(selected.ticker);
       await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
     }
-    // Write BUY transaction — engine calculates position automatically
     await addTransaction({
       ticker: selected.ticker,
       assetType: selected.type ?? 'ETF',
-      transactionType: 'BUY',
+      transactionType,
       quantity: qtyNum,
       pricePerShare: costNum,
-      notes: isExisting ? 'Added to existing position' : '',
+      date: purchaseDate || undefined,
+      notes: transactionType === 'SELL' ? 'Sold' : isExisting ? 'Added to existing position' : '',
     });
     onAdded();
     onClose();
-  } catch (e) {
-    console.error('Save error:', e);
-  }
+  } catch (e) { console.error('Save error:', e); }
   setSaving(false);
 }
 
@@ -316,20 +314,52 @@ async function handleSave() {
                 </TouchableOpacity>
               </View>
               <Text style={modal.selectedName} numberOfLines={2}>{selected?.name}</Text>
-              {isExisting && (
+
+              {/* BUY / SELL toggle */}
+              <View style={modal.txTypeRow}>
+                <TouchableOpacity
+                  style={[modal.txTypeBtn, transactionType === 'BUY' && modal.txTypeBtnActiveBuy]}
+                  onPress={() => setTransactionType('BUY')}
+                >
+                  <Text style={[modal.txTypeBtnText, transactionType === 'BUY' && { color: '#00C896' }]}>BUY</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[modal.txTypeBtn, transactionType === 'SELL' && modal.txTypeBtnActiveSell]}
+                  onPress={() => setTransactionType('SELL')}
+                >
+                  <Text style={[modal.txTypeBtnText, transactionType === 'SELL' && { color: '#FF5A5F' }]}>SELL</Text>
+                </TouchableOpacity>
+              </View>
+
+              {isExisting && transactionType === 'BUY' && (
                 <View style={modal.updateBanner}>
-                  <Ionicons name="refresh-outline" size={14} color="#FF9F43" />
-                  <Text style={modal.updateBannerText}>Updating existing position</Text>
+                  <Ionicons name="add-circle-outline" size={14} color="#00C896" />
+                  <Text style={[modal.updateBannerText, { color: '#00C896' }]}>Adding to existing position</Text>
                 </View>
               )}
+              {transactionType === 'SELL' && (
+                <View style={[modal.updateBanner, { backgroundColor: '#FF5A5F22' }]}>
+                  <Ionicons name="trending-down-outline" size={14} color="#FF5A5F" />
+                  <Text style={[modal.updateBannerText, { color: '#FF5A5F' }]}>Recording a sell — FIFO cost basis applied</Text>
+                </View>
+              )}
+
               <Text style={modal.inputLabel}>Shares / Units</Text>
               <TextInput style={modal.input} placeholder="e.g. 10.5" placeholderTextColor="#4A6080" value={qty} onChangeText={setQty} keyboardType="decimal-pad" autoFocus />
-              <Text style={modal.inputLabel}>Avg Cost per Share (optional)</Text>
+              <Text style={modal.inputLabel}>{transactionType === 'SELL' ? 'Sale Price per Share' : 'Avg Cost per Share (optional)'}</Text>
               <TextInput style={modal.input} placeholder="e.g. 27.50" placeholderTextColor="#4A6080" value={avgCost} onChangeText={setAvgCost} keyboardType="decimal-pad" />
-              <Text style={modal.inputLabel}>Purchase Date (optional)</Text>
+              <Text style={modal.inputLabel}>Date (optional)</Text>
               <TextInput style={modal.input} placeholder="e.g. 2024-01-15" placeholderTextColor="#4A6080" value={purchaseDate} onChangeText={setPurchaseDate} />
-              <TouchableOpacity style={[modal.saveBtn, (!qty || saving) && { opacity: 0.5 }]} onPress={handleSave} disabled={!qty || saving}>
-                {saving ? <ActivityIndicator color="#fff" /> : <Text style={modal.saveBtnText}>{isExisting ? 'Update Position' : 'Add to Portfolio'}</Text>}
+              <TouchableOpacity
+                style={[modal.saveBtn, { backgroundColor: transactionType === 'SELL' ? '#FF5A5F' : '#338DFF' }, (!qty || saving) && { opacity: 0.5 }]}
+                onPress={handleSave}
+                disabled={!qty || saving}
+              >
+                {saving ? <ActivityIndicator color="#fff" /> : (
+                  <Text style={modal.saveBtnText}>
+                    {transactionType === 'SELL' ? 'Record Sale' : isExisting ? 'Add to Position' : 'Add to Portfolio'}
+                  </Text>
+                )}
               </TouchableOpacity>
             </>
           )}
@@ -499,6 +529,11 @@ const modal = StyleSheet.create({
   actionTitle: { fontSize: 15, fontWeight: '600', color: '#E8EEF8', marginBottom: 2 },
   actionSub: { fontSize: 12, color: '#4A6080' },
   actionDivider: { height: 0.5, backgroundColor: 'rgba(255,255,255,0.06)', marginHorizontal: -20 },
+  txTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+txTypeBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', backgroundColor: '#0B0F19', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)' },
+txTypeBtnActiveBuy: { backgroundColor: '#00C89618', borderColor: '#00C896' },
+txTypeBtnActiveSell: { backgroundColor: '#FF5A5F18', borderColor: '#FF5A5F' },
+txTypeBtnText: { fontSize: 14, fontWeight: '700', color: '#4A6080' },
 });
 
 // ── Main Screen ───────────────────────────────────────────────
