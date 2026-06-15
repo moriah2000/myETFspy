@@ -11,6 +11,7 @@ import Svg, { Circle, G } from 'react-native-svg';
 import InteractiveChart from '../../components/InteractiveChart';
 import { usePortfolioChartPoints } from '../hooks/useChartPoints';
 import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
+
 import { getETFDividends, getETFTopHoldings, searchAsset } from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -201,8 +202,7 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
   const [saving, setSaving] = useState(false);
   const [isExisting, setIsExisting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
+    useEffect(() => {
     if (visible) { setStep('search'); setQuery(''); setResults([]); setSelected(null); setQty(''); setAvgCost(''); setPurchaseDate(''); setIsExisting(false); }
   }, [visible]);
 
@@ -225,25 +225,26 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
     setStep('details');
   }
 
-  async function handleSave() {
-    if (!selected || !qty) return;
-    const qtyNum = parseFloat(qty);
-    const costNum = parseFloat(avgCost) || 0;
-    if (isNaN(qtyNum) || qtyNum <= 0) return;
-    setSaving(true);
-    try {
-      const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
-      const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
-      const etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-      const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-      if (!etfs.includes(selected.ticker)) etfs.push(selected.ticker);
-      holdings[selected.ticker] = { qty: qtyNum, cost: costNum, purchaseDate: purchaseDate || null };
-      await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
-      await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
-      onAdded(); onClose();
-    } catch (e) { console.error('Save error:', e); }
-    setSaving(false);
-  }
+  
+async function handleSave() {
+  if (!selected || !qty) return;
+  const qtyNum = parseFloat(qty);
+  const costNum = parseFloat(avgCost) || 0;
+  if (isNaN(qtyNum) || qtyNum <= 0) return;
+  setSaving(true);
+  try {
+    const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
+    const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
+    const etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
+    const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
+    if (!etfs.includes(selected.ticker)) etfs.push(selected.ticker);
+    holdings[selected.ticker] = { qty: qtyNum, cost: costNum, purchaseDate: purchaseDate || null };
+    await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
+    await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
+    onAdded(); onClose();
+  } catch (e) { console.error('Save error:', e); }
+  setSaving(false);
+}
 
   const typeBadgeColor = (type: string) => type === 'ETF' ? '#338DFF' : type === 'STOCK' ? '#00C896' : '#FF9F43';
 

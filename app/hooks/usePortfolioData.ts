@@ -25,7 +25,7 @@ export const ETF_COLORS: Record<string, string> = {
   QQQI: '#E879F9',
 };
 
-const REFRESH_INTERVAL = 10 * 1000; // 1 minute
+const REFRESH_INTERVAL = 10 * 1000;
 
 export function usePortfolioData() {
   const [positions, setPositions] = useState<ETFPosition[]>([]);
@@ -47,7 +47,7 @@ export function usePortfolioData() {
         setLoading(false);
         setRefreshing(false);
         return;
-}
+      }
       const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
       const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
       const data: ETFPosition[] = tickers.map((ticker, i) => {
