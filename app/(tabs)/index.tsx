@@ -40,30 +40,31 @@ export default function HomeScreen() {
   // Re-use portfolio prices for watchlist tickers that are also in portfolio
   // Only fetch separately for pure-watchlist tickers
   async function loadWatchlist() {
-    setWatchLoading(true);
-    try {
-      const raw = await AsyncStorage.getItem('userWatchlist');
-      const tickers: string[] = raw ? JSON.parse(raw) : [];
-      if (tickers.length === 0) { setWatchlist([]); setWatchLoading(false); return; }
+  setWatchLoading(true);
+  try {
+    const raw = await AsyncStorage.getItem('watchlist_items');
+    const parsed: { ticker: string; name: string; type: string }[] = raw ? JSON.parse(raw) : [];
+    if (parsed.length === 0) { setWatchlist([]); setWatchLoading(false); return; }
 
-      const prices = await Promise.all(tickers.map(t => getETFPrice(t)));
-      const items: WatchItem[] = tickers.map((ticker, i) => {
-        const p = prices[i];
-        return {
-          ticker,
-          price: p?.price ?? 0,
-          change: p?.change ?? 0,
-          pct: p?.changesPercentage ?? 0,
-          color: ETF_COLORS[ticker] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length],
-        };
-      });
-      setWatchlist(items);
-    } catch (e) {
-      console.error('Watchlist fetch error:', e);
-    } finally {
-      setWatchLoading(false);
-    }
+    const validItems = parsed.filter(item => item && item.ticker);
+    const prices = await Promise.all(validItems.map(item => getETFPrice(item.ticker)));
+    const items: WatchItem[] = validItems.map((item, i) => {
+      const p = prices[i];
+      return {
+        ticker: item.ticker,
+        price: p?.price ?? 0,
+        change: p?.change ?? 0,
+        pct: p?.changesPercentage ?? 0,
+        color: ETF_COLORS[item.ticker] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length],
+      };
+    });
+    setWatchlist(items);
+  } catch (e) {
+    console.error('Watchlist fetch error:', e);
+  } finally {
+    setWatchLoading(false);
   }
+}
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';

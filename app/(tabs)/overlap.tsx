@@ -11,6 +11,7 @@ import Svg, { Circle, G } from 'react-native-svg';
 import InteractiveChart from '../../components/InteractiveChart';
 import { usePortfolioChartPoints } from '../hooks/useChartPoints';
 import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
+import { usePortfolioTransactions } from '../hooks/usePortfolioTransactions';
 
 import { getETFDividends, getETFTopHoldings, searchAsset } from '../services/api';
 
@@ -201,6 +202,7 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
   const [purchaseDate, setPurchaseDate] = useState('');
   const [saving, setSaving] = useState(false);
   const [isExisting, setIsExisting] = useState(false);
+  const { addTransaction } = usePortfolioTransactions();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
     if (visible) { setStep('search'); setQuery(''); setResults([]); setSelected(null); setQty(''); setAvgCost(''); setPurchaseDate(''); setIsExisting(false); }
@@ -233,18 +235,30 @@ async function handleSave() {
   if (isNaN(qtyNum) || qtyNum <= 0) return;
   setSaving(true);
   try {
+    // Keep userETFs updated so price fetching still works
     const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
-    const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
     const etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-    const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-    if (!etfs.includes(selected.ticker)) etfs.push(selected.ticker);
-    holdings[selected.ticker] = { qty: qtyNum, cost: costNum, purchaseDate: purchaseDate || null };
-    await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
-    await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
-    onAdded(); onClose();
-  } catch (e) { console.error('Save error:', e); }
+    if (!etfs.includes(selected.ticker)) {
+      etfs.push(selected.ticker);
+      await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
+    }
+    // Write BUY transaction — engine calculates position automatically
+    await addTransaction({
+      ticker: selected.ticker,
+      assetType: selected.type ?? 'ETF',
+      transactionType: 'BUY',
+      quantity: qtyNum,
+      pricePerShare: costNum,
+      notes: isExisting ? 'Added to existing position' : '',
+    });
+    onAdded();
+    onClose();
+  } catch (e) {
+    console.error('Save error:', e);
+  }
   setSaving(false);
 }
+
 
   const typeBadgeColor = (type: string) => type === 'ETF' ? '#338DFF' : type === 'STOCK' ? '#00C896' : '#FF9F43';
 
@@ -338,31 +352,47 @@ function ManagePortfolioModal({ visible, onClose, positions, onRemoved, onDelete
   const [removing, setRemoving] = useState<string | null>(null);
 
   async function handleRemove(ticker: string) {
-    setRemoving(ticker);
-    try {
-      const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
-      const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
-      let etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-      const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-      etfs = etfs.filter(t => t !== ticker);
-      delete holdings[ticker];
-      await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
-      await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
-      onRemoved();
-    } catch (e) { console.error('Remove error:', e); }
-    setRemoving(null);
-  }
+  setRemoving(ticker);
+  try {
+    // Remove from userETFs
+    const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
+    let etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
+    etfs = etfs.filter(t => t !== ticker);
+    await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
 
-  function handleDeleteAll() {
-    Alert.alert('Delete Portfolio', 'This will remove all positions and reset your portfolio. This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete All', style: 'destructive', onPress: async () => {
-        await AsyncStorage.multiRemove([USER_ETFS_KEY, USER_HOLDINGS_KEY, SNAPSHOT_KEY]);
-        onDeleteAll();
-        onClose();
-      }},
-    ]);
-  }
+    // Remove from userHoldings
+    const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
+    const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
+    delete holdings[ticker];
+    await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
+
+    // Remove from portfolio_transactions
+    const txRaw = await AsyncStorage.getItem('portfolio_transactions');
+    const txns: any[] = txRaw ? JSON.parse(txRaw) : [];
+    const filtered = txns.filter(t => t.ticker !== ticker);
+    await AsyncStorage.setItem('portfolio_transactions', JSON.stringify(filtered));
+
+    onRemoved();
+  } catch (e) { console.error('Remove error:', e); }
+  setRemoving(null);
+}
+
+  async function handleDeleteAll() {
+  Alert.alert('Delete Portfolio', 'This will remove all positions and reset your portfolio. This cannot be undone.', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Delete All', style: 'destructive', onPress: async () => {
+      await AsyncStorage.multiRemove([
+        USER_ETFS_KEY,
+        USER_HOLDINGS_KEY,
+        SNAPSHOT_KEY,
+        'portfolio_transactions',
+        'v1_5_migration_complete',
+      ]);
+      onDeleteAll();
+      onClose();
+    }},
+  ]);
+}
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>

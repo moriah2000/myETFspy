@@ -49,20 +49,62 @@ export function usePortfolioData() {
         return;
       }
       const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-      const prices = await Promise.all(tickers.map((t) => getETFPrice(t)));
-      const data: ETFPosition[] = tickers.map((ticker, i) => {
+
+      // Also read transactions and calculate positions from them
+      const txRaw = await AsyncStorage.getItem('portfolio_transactions');
+      const transactions: any[] = txRaw ? JSON.parse(txRaw) : [];
+
+      // Build a shares/cost map from transactions (simple weighted average)
+      const txMap: Record<string, { qty: number; totalCost: number }> = {};
+      for (const txn of transactions) {
+        if (!txMap[txn.ticker]) txMap[txn.ticker] = { qty: 0, totalCost: 0 };
+        if (txn.transactionType === 'BUY') {
+          txMap[txn.ticker].qty += txn.quantity;
+          txMap[txn.ticker].totalCost += txn.quantity * txn.pricePerShare;
+        } else if (txn.transactionType === 'SELL') {
+          txMap[txn.ticker].qty -= txn.quantity;
+        }
+      }
+
+      // Merge: transactions take priority over legacy holdings
+      const mergedHoldings: Record<string, { qty: number; avgCost: number }> = {};
+      // First load legacy holdings
+      for (const ticker of tickers) {
+        const h = holdingsData[ticker];
+        if (h) {
+          mergedHoldings[ticker] = {
+            qty: parseFloat(String(h.qty || '0')),
+            avgCost: parseFloat(String(h.cost || '0')),
+          };
+        }
+      }
+      // Override/add with transaction-derived positions
+      for (const [ticker, pos] of Object.entries(txMap)) {
+        if (pos.qty > 0) {
+          mergedHoldings[ticker] = {
+            qty: pos.qty,
+            avgCost: pos.qty > 0 ? pos.totalCost / pos.qty : 0,
+          };
+        }
+      }
+
+      // Add any transaction tickers not already in tickers list
+      const txTickers = Object.keys(txMap).filter(t => !tickers.includes(t) && txMap[t].qty > 0);
+      const allTickers = [...tickers, ...txTickers];
+
+      const prices = await Promise.all(allTickers.map((t) => getETFPrice(t)));
+      const data: ETFPosition[] = allTickers.map((ticker, i) => {
         const p = prices[i];
-        const qty = parseFloat(holdingsData[ticker]?.qty || '0');
-        const avgCost = parseFloat(holdingsData[ticker]?.cost || '0');
-        const price = p?.price ?? 0;
+        const qty = mergedHoldings[ticker]?.qty ?? 0;
+        const avgCost = mergedHoldings[ticker]?.avgCost ?? 0;
         return {
           ticker,
-          price,
+          price: p?.price ?? 0,
           change: p?.change ?? 0,
           pct: p?.changesPercentage ?? 0,
           qty,
           avgCost,
-          value: qty > 0 ? qty * price : 0,
+          value: qty > 0 ? qty * (p?.price ?? 0) : 0,
           color: ETF_COLORS[ticker] || ['#338DFF','#00C896','#FF9F43','#A78BFA','#FF5A5F','#66AFFF','#FFD93D','#E879F9','#4FC3F7'][i % 9],
         };
       });

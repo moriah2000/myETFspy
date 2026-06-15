@@ -44,18 +44,12 @@ export default function SetupScreen() {
 
   async function handleFinish() {
   try {
-    // Seed watchlist tab with selected tickers
-    const existing = await AsyncStorage.getItem('watchlist_items');
-    const currentList = existing ? JSON.parse(existing) : [];
-    const toAdd = selected
-      .filter(ticker => !currentList.some((i: any) => i.ticker === ticker))
-      .map(ticker => {
-        const etf = POPULAR_ETFS.find(e => e.ticker === ticker);
-        return { ticker, name: etf?.name ?? ticker, type: 'ETF' };
-      });
-    if (toAdd.length > 0) {
-      await AsyncStorage.setItem('watchlist_items', JSON.stringify([...currentList, ...toAdd]));
-    }
+    // Overwrite watchlist with fresh onboarding picks
+    const newWatchlist = selected.map(ticker => {
+    const etf = POPULAR_ETFS.find(e => e.ticker === ticker);
+    return { ticker, name: etf?.name ?? ticker, type: 'ETF' };
+  });
+  await AsyncStorage.setItem('watchlist_items', JSON.stringify(newWatchlist));
 
     // Only tickers with qty > 0 go to portfolio
     const portfolioTickers = selected.filter(ticker => {
