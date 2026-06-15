@@ -1,11 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   RefreshControl, ScrollView, StatusBar, StyleSheet,
   Text, View,
 } from 'react-native';
-import { usePortfolioData } from '../hooks/usePortfolioData';
+import { ETF_COLORS, usePortfolioData } from '../hooks/usePortfolioData';
+import { getETFPrice } from '../services/api';
+
+const FALLBACK_COLORS = ['#338DFF','#00C896','#FF9F43','#A78BFA','#FF5A5F','#66AFFF','#FFD93D','#E879F9','#4FC3F7'];
+
+type WatchItem = {
+  ticker: string;
+  price: number;
+  change: number;
+  pct: number;
+  color: string;
+};
 
 export default function HomeScreen() {
   const {
@@ -14,12 +26,44 @@ export default function HomeScreen() {
     hasValues, refresh, reset, startFetching,
   } = usePortfolioData();
 
+  const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
+  const [watchLoading, setWatchLoading] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       startFetching();
+      loadWatchlist();
       return () => reset();
     }, [])
   );
+
+  // Re-use portfolio prices for watchlist tickers that are also in portfolio
+  // Only fetch separately for pure-watchlist tickers
+  async function loadWatchlist() {
+    setWatchLoading(true);
+    try {
+      const raw = await AsyncStorage.getItem('userWatchlist');
+      const tickers: string[] = raw ? JSON.parse(raw) : [];
+      if (tickers.length === 0) { setWatchlist([]); setWatchLoading(false); return; }
+
+      const prices = await Promise.all(tickers.map(t => getETFPrice(t)));
+      const items: WatchItem[] = tickers.map((ticker, i) => {
+        const p = prices[i];
+        return {
+          ticker,
+          price: p?.price ?? 0,
+          change: p?.change ?? 0,
+          pct: p?.changesPercentage ?? 0,
+          color: ETF_COLORS[ticker] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length],
+        };
+      });
+      setWatchlist(items);
+    } catch (e) {
+      console.error('Watchlist fetch error:', e);
+    } finally {
+      setWatchLoading(false);
+    }
+  }
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -35,11 +79,27 @@ export default function HomeScreen() {
   }, 0);
   const annYieldPct = totalValue > 0 ? (annYield / totalValue) * 100 : null;
 
+  // Watchlist tickers that are NOT in portfolio (pure watchers)
+  const portfolioTickers = new Set(positions.map(p => p.ticker));
+  const watchlistOnly = watchlist.filter(w => !portfolioTickers.has(w.ticker));
+  // Watchlist tickers that ARE in portfolio — pull data from positions (already live)
+  const watchlistInPortfolio = watchlist
+    .filter(w => portfolioTickers.has(w.ticker))
+    .map(w => {
+      const pos = positions.find(p => p.ticker === w.ticker);
+      return pos ? { ...w, price: pos.price, change: pos.change, pct: pos.pct } : w;
+    });
+  const allWatchItems = [...watchlistInPortfolio, ...watchlistOnly];
+
+  function handleRefresh() {
+    refresh();
+    loadWatchlist();
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* STATIC HEADER */}
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>{greeting}, Investor! 👋</Text>
@@ -53,110 +113,156 @@ export default function HomeScreen() {
         style={styles.scroll}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#338DFF" colors={['#338DFF']} />
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#338DFF" colors={['#338DFF']} />
         }
       >
-        {/* Hero Card */}
-        <View style={styles.heroCard}>
-          <Text style={styles.heroLabel}>TOTAL PORTFOLIO VALUE</Text>
-          <Text style={styles.heroValue}>
-            {loading ? '—' : hasValues
-              ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : '—'}
-          </Text>
-          {hasValues && !loading && (
-            <View style={styles.heroRow}>
-              <View style={[styles.gainBadge, {
-                backgroundColor: totalChange >= 0 ? 'rgba(0,200,150,0.1)' : 'rgba(255,90,95,0.1)'
-              }]}>
-                <Ionicons
-                  name={totalChange >= 0 ? 'arrow-up' : 'arrow-down'}
-                  size={11}
-                  color={totalChange >= 0 ? '#00C896' : '#FF5A5F'}
-                />
-                <Text style={[styles.gainText, { color: totalChange >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                  ${Math.abs(totalChange).toFixed(2)} today
+        {/* Hero Card — only shown if user has portfolio holdings */}
+        {(hasValues || loading) && (
+          <View style={styles.heroCard}>
+            <Text style={styles.heroLabel}>TOTAL PORTFOLIO VALUE</Text>
+            <Text style={styles.heroValue}>
+              {loading ? '—' : `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </Text>
+            {hasValues && !loading && (
+              <View style={styles.heroRow}>
+                <View style={[styles.gainBadge, {
+                  backgroundColor: totalChange >= 0 ? 'rgba(0,200,150,0.1)' : 'rgba(255,90,95,0.1)'
+                }]}>
+                  <Ionicons
+                    name={totalChange >= 0 ? 'arrow-up' : 'arrow-down'}
+                    size={11}
+                    color={totalChange >= 0 ? '#00C896' : '#FF5A5F'}
+                  />
+                  <Text style={[styles.gainText, { color: totalChange >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                    ${Math.abs(totalChange).toFixed(2)} today
+                  </Text>
+                </View>
+                <Text style={[styles.heroPct, { color: totalChangePct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                  {totalChangePct >= 0 ? '↑' : '↓'} {Math.abs(totalChangePct).toFixed(2)}%
                 </Text>
               </View>
-              <Text style={[styles.heroPct, { color: totalChangePct >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                {totalChangePct >= 0 ? '↑' : '↓'} {Math.abs(totalChangePct).toFixed(2)}%
-              </Text>
-            </View>
-          )}
-          {!hasValues && !loading && (
-            <Text style={styles.noQtyHint}>Add quantities in Setup to see your total value</Text>
-          )}
-          <View style={styles.heroMeta}>
-            <View style={styles.heroMetaItem}>
-              <Text style={styles.metaLabel}>TOTAL RETURN</Text>
-              <Text style={[styles.metaValue, totalReturn !== null && { color: totalReturn >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                {totalReturn !== null ? `${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%` : '—'}
-              </Text>
-            </View>
-            <View style={styles.heroMetaItem}>
-              <Text style={styles.metaLabel}>SINCE INCEPTION</Text>
-              <Text style={[styles.metaValue, totalReturn !== null && { color: totalReturn >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                {costBasis > 0
-                  ? `$${(totalValue - costBasis).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-                  : '—'}
-              </Text>
-            </View>
-            <View style={styles.heroMetaItem}>
-              <Text style={styles.metaLabel}>ANN. YIELD</Text>
-              <Text style={[styles.metaValue, { color: '#00C896' }]}>
-                {annYieldPct !== null ? `${annYieldPct.toFixed(2)}%` : '—'}
-              </Text>
+            )}
+            <View style={styles.heroMeta}>
+              <View style={styles.heroMetaItem}>
+                <Text style={styles.metaLabel}>TOTAL RETURN</Text>
+                <Text style={[styles.metaValue, totalReturn !== null && { color: totalReturn >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                  {totalReturn !== null ? `${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%` : '—'}
+                </Text>
+              </View>
+              <View style={styles.heroMetaItem}>
+                <Text style={styles.metaLabel}>SINCE INCEPTION</Text>
+                <Text style={[styles.metaValue, totalReturn !== null && { color: totalReturn >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                  {costBasis > 0
+                    ? `$${(totalValue - costBasis).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    : '—'}
+                </Text>
+              </View>
+              <View style={styles.heroMetaItem}>
+                <Text style={styles.metaLabel}>ANN. YIELD</Text>
+                <Text style={[styles.metaValue, { color: '#00C896' }]}>
+                  {annYieldPct !== null ? `${annYieldPct.toFixed(2)}%` : '—'}
+                </Text>
+              </View>
             </View>
           </View>
-        </View>
+        )}
 
-        {/* YOUR ASSETS */}
-        <Text style={styles.sectionTitle}>YOUR ASSETS</Text>
-        <View style={styles.card}>
-          {(loading ? [] : positions).map((etf) => (
-            <View key={etf.ticker} style={styles.etfRow}>
-              <View style={[styles.etfIconBox, { borderColor: etf.color + '44' }]}>
-                <Text style={[styles.etfIconText, { color: etf.color }]}>{etf.ticker.slice(0, 1)}</Text>
-              </View>
-              <View style={styles.etfMid}>
-                <Text style={styles.etfTicker}>{etf.ticker}</Text>
-                {etf.value > 0 && (
-                  <Text style={styles.etfValue}>
-                    ${etf.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </Text>
-                )}
-              </View>
-              <View style={styles.etfRight}>
-                <Text style={styles.etfPrice}>
-                  {etf.price > 0 ? `$${etf.price.toFixed(2)}` : '—'}
-                </Text>
-                <Text style={[styles.etfChange, { color: etf.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
-                  {etf.pct >= 0 ? '+' : ''}{etf.pct.toFixed(2)}%
-                </Text>
-              </View>
+        {/* WATCHLIST — all tracked tickers with live prices */}
+        {allWatchItems.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>WATCHLIST</Text>
+            <View style={styles.card}>
+              {(watchLoading && allWatchItems.length === 0)
+                ? <Text style={styles.loadingText}>Loading prices…</Text>
+                : allWatchItems.map((item) => {
+                    const inPortfolio = portfolioTickers.has(item.ticker);
+                    const pos = positions.find(p => p.ticker === item.ticker);
+                    return (
+                      <View key={item.ticker} style={styles.etfRow}>
+                        <View style={[styles.etfIconBox, { borderColor: item.color + '44' }]}>
+                          <Text style={[styles.etfIconText, { color: item.color }]}>{item.ticker.slice(0, 1)}</Text>
+                        </View>
+                        <View style={styles.etfMid}>
+                          <View style={styles.tickerRow}>
+                            <Text style={styles.etfTicker}>{item.ticker}</Text>
+                            {inPortfolio && (
+                              <View style={styles.ownedBadge}>
+                                <Text style={styles.ownedBadgeText}>Owned</Text>
+                              </View>
+                            )}
+                          </View>
+                          {inPortfolio && pos && pos.value > 0 && (
+                            <Text style={styles.etfValue}>
+                              ${pos.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={styles.etfRight}>
+                          <Text style={styles.etfPrice}>
+                            {item.price > 0 ? `$${item.price.toFixed(2)}` : '—'}
+                          </Text>
+                          <Text style={[styles.etfChange, { color: item.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                            {item.pct >= 0 ? '+' : ''}{item.pct.toFixed(2)}%
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
             </View>
-          ))}
-          {loading && <Text style={styles.loadingText}>Loading live prices…</Text>}
-        </View>
+          </>
+        )}
 
-        {/* ASSET ALLOCATION */}
-        <Text style={styles.sectionTitle}>ASSET ALLOCATION</Text>
-        <View style={[styles.card, styles.lastCard]}>
-          {positions.map((item) => {
-            const pct = totalValue > 0
-              ? Math.round((item.value / totalValue) * 100)
-              : Math.round(100 / positions.length);
-            return (
-              <View key={item.ticker} style={styles.allocRow}>
-                <Text style={styles.allocLabel}>{item.ticker}</Text>
-                <View style={styles.allocBarWrap}>
-                  <View style={[styles.allocBar, { width: `${pct}%` as any, backgroundColor: item.color }]} />
+        {/* YOUR PORTFOLIO — only tickers with actual holdings */}
+        {positions.filter(p => p.qty > 0).length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>YOUR ASSETS</Text>
+            <View style={styles.card}>
+              {(loading ? [] : positions.filter(p => p.qty > 0)).map((etf) => (
+                <View key={etf.ticker} style={styles.etfRow}>
+                  <View style={[styles.etfIconBox, { borderColor: etf.color + '44' }]}>
+                    <Text style={[styles.etfIconText, { color: etf.color }]}>{etf.ticker.slice(0, 1)}</Text>
+                  </View>
+                  <View style={styles.etfMid}>
+                    <Text style={styles.etfTicker}>{etf.ticker}</Text>
+                    <Text style={styles.etfValue}>
+                      ${etf.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                  <View style={styles.etfRight}>
+                    <Text style={styles.etfPrice}>${etf.price.toFixed(2)}</Text>
+                    <Text style={[styles.etfChange, { color: etf.pct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                      {etf.pct >= 0 ? '+' : ''}{etf.pct.toFixed(2)}%
+                    </Text>
+                  </View>
                 </View>
-                <Text style={styles.allocPct}>{pct}%</Text>
-              </View>
-            );
-          })}
-        </View>
+              ))}
+              {loading && <Text style={styles.loadingText}>Loading live prices…</Text>}
+            </View>
+          </>
+        )}
+
+        {/* ASSET ALLOCATION — only if portfolio has values */}
+        {hasValues && !loading && (
+          <>
+            <Text style={styles.sectionTitle}>ASSET ALLOCATION</Text>
+            <View style={[styles.card, styles.lastCard]}>
+              {positions.filter(p => p.value > 0).map((item) => {
+                const pct = Math.round((item.value / totalValue) * 100);
+                return (
+                  <View key={item.ticker} style={styles.allocRow}>
+                    <Text style={styles.allocLabel}>{item.ticker}</Text>
+                    <View style={styles.allocBarWrap}>
+                      <View style={[styles.allocBar, { width: `${pct}%` as any, backgroundColor: item.color }]} />
+                    </View>
+                    <Text style={styles.allocPct}>{pct}%</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        <View style={{ height: 24 }} />
       </ScrollView>
     </View>
   );
@@ -179,7 +285,6 @@ const styles = StyleSheet.create({
   gainBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
   gainText: { fontSize: 13 },
   heroPct: { fontSize: 14 },
-  noQtyHint: { fontSize: 12, color: '#4A6080', marginBottom: 16, fontStyle: 'italic' },
   heroMeta: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)', paddingTop: 14 },
   heroMetaItem: {},
   metaLabel: { fontSize: 10, color: '#3A5070', letterSpacing: 1, marginBottom: 2 },
@@ -192,7 +297,10 @@ const styles = StyleSheet.create({
   etfIconBox: { width: 40, height: 40, borderRadius: 10, backgroundColor: '#0D1830', borderWidth: 0.5, alignItems: 'center', justifyContent: 'center' },
   etfIconText: { fontSize: 16, fontWeight: '700' },
   etfMid: { flex: 1 },
+  tickerRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   etfTicker: { fontSize: 14, fontWeight: '700', color: '#E8EEF8' },
+  ownedBadge: { backgroundColor: '#00C89622', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  ownedBadgeText: { fontSize: 9, fontWeight: '700', color: '#00C896' },
   etfValue: { fontSize: 11, color: '#4A6080', marginTop: 2, fontVariant: ['tabular-nums'] },
   etfRight: { alignItems: 'flex-end' },
   etfPrice: { fontSize: 14, color: '#C8D8F0', fontVariant: ['tabular-nums'] },

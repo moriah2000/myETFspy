@@ -43,16 +43,32 @@ export default function SetupScreen() {
   }
 
   async function handleFinish() {
-    try {
-      // Save selected ETF tickers
-      await AsyncStorage.setItem('userETFs', JSON.stringify(selected));
-      // Save holdings (qty + cost basis)
-      await AsyncStorage.setItem('userHoldings', JSON.stringify(holdings));
-    } catch (e) {
-      console.error('Failed to save ETF data', e);
+  try {
+    // Seed watchlist tab with selected tickers
+    const existing = await AsyncStorage.getItem('watchlist_items');
+    const currentList = existing ? JSON.parse(existing) : [];
+    const toAdd = selected
+      .filter(ticker => !currentList.some((i: any) => i.ticker === ticker))
+      .map(ticker => {
+        const etf = POPULAR_ETFS.find(e => e.ticker === ticker);
+        return { ticker, name: etf?.name ?? ticker, type: 'ETF' };
+      });
+    if (toAdd.length > 0) {
+      await AsyncStorage.setItem('watchlist_items', JSON.stringify([...currentList, ...toAdd]));
     }
-    router.replace('/(tabs)');
+
+    // Only tickers with qty > 0 go to portfolio
+    const portfolioTickers = selected.filter(ticker => {
+      const qty = parseFloat(holdings[ticker]?.qty || '0');
+      return qty > 0;
+    });
+    await AsyncStorage.setItem('userETFs', JSON.stringify(portfolioTickers));
+    await AsyncStorage.setItem('userHoldings', JSON.stringify(holdings));
+  } catch (e) {
+    console.error('Failed to save ETF data', e);
   }
+  router.replace('/(tabs)');
+}
 
   if (step === 1) {
     return (
@@ -124,9 +140,10 @@ export default function SetupScreen() {
 
       <Text style={styles.title}>Tell us what you{'\n'}currently own</Text>
       <Text style={styles.subtitle}>This helps us personalize your insights and alerts.</Text>
+      <Text style={styles.skipHint}>Leave blank to just monitor in watchlist.</Text>
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {selected.map((ticker, i) => (
+        {selected.map((ticker) => (
           <View key={ticker} style={styles.holdingInputRow}>
             <View style={styles.holdingIcon}>
               <Text style={styles.holdingTicker}>{ticker}</Text>
@@ -134,7 +151,7 @@ export default function SetupScreen() {
             <View style={styles.holdingInputs}>
               <TextInput
                 style={styles.input}
-                placeholder="Qty"
+                placeholder="Qty (leave blank to just watch)"
                 placeholderTextColor="#3A5070"
                 keyboardType="numeric"
                 value={holdings[ticker]?.qty ?? ''}
@@ -172,7 +189,8 @@ const styles = StyleSheet.create({
   back: { marginTop: 60, marginBottom: 16, width: 36 },
   backText: { fontSize: 28, color: '#338DFF' },
   title: { fontSize: 28, fontWeight: '700', color: '#E8EEF8', lineHeight: 38, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#4A6080', marginBottom: 20, lineHeight: 22 },
+  subtitle: { fontSize: 14, color: '#4A6080', marginBottom: 4, lineHeight: 22 },
+  skipHint: { fontSize: 12, color: '#2A4060', marginBottom: 20, fontStyle: 'italic' },
   searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#141A26', borderRadius: 10, paddingHorizontal: 12, marginBottom: 16 },
   searchIcon: { fontSize: 14, marginRight: 8 },
   searchInput: { flex: 1, height: 44, color: '#E8EEF8', fontSize: 14 },
