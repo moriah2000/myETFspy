@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Dimensions, FlatList, LayoutAnimation,
@@ -204,6 +204,7 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
   const [isExisting, setIsExisting] = useState(false);
   const [transactionType, setTransactionType] = useState<'BUY' | 'SELL'>('BUY');
   const { addTransaction } = usePortfolioTransactions();
+  
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
     if (visible) { setStep('search'); setQuery(''); setResults([]); setSelected(null); setQty(''); setAvgCost(''); setPurchaseDate(''); setIsExisting(false); setTransactionType('BUY'); }
@@ -470,7 +471,7 @@ function ManagePortfolioModal({ visible, onClose, positions, onRemoved, onDelete
 }
 
 // ── Action Sheet ──────────────────────────────────────────────
-function PortfolioActionSheet({ visible, onClose, onAddAsset, onManage }: { visible: boolean; onClose: () => void; onAddAsset: () => void; onManage: () => void; }) {
+function PortfolioActionSheet({ visible, onClose, onAddAsset, onManage, onHistory }: { visible: boolean; onClose: () => void; onAddAsset: () => void; onManage: () => void; onHistory: () => void; }) {
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <TouchableOpacity style={modal.overlay} activeOpacity={1} onPress={onClose}>
@@ -479,6 +480,11 @@ function PortfolioActionSheet({ visible, onClose, onAddAsset, onManage }: { visi
           <TouchableOpacity style={modal.actionRow} onPress={() => { onClose(); onAddAsset(); }}>
             <View style={[modal.actionIcon, { backgroundColor: '#338DFF22' }]}><Ionicons name="add-circle-outline" size={22} color="#338DFF" /></View>
             <View><Text style={modal.actionTitle}>Add Asset</Text><Text style={modal.actionSub}>Search and add or update a position</Text></View>
+          </TouchableOpacity>
+          <View style={modal.actionDivider} />
+          <TouchableOpacity style={modal.actionRow} onPress={() => { onClose(); onHistory(); }}>
+            <View style={[modal.actionIcon, { backgroundColor: '#A78BFA22' }]}><Ionicons name="receipt-outline" size={22} color="#A78BFA" /></View>
+            <View><Text style={modal.actionTitle}>Transaction History</Text><Text style={modal.actionSub}>View, edit, or delete past transactions</Text></View>
           </TouchableOpacity>
           <View style={modal.actionDivider} />
           <TouchableOpacity style={modal.actionRow} onPress={() => { onClose(); onManage(); }}>
@@ -539,7 +545,7 @@ txTypeBtnText: { fontSize: 14, fontWeight: '700', color: '#4A6080' },
 // ── Main Screen ───────────────────────────────────────────────
 export default function PortfolioScreen() {
   const { positions, loading, refreshing, totalValue, hasValues, refresh, reset, startFetching } = usePortfolioData();
-
+  const router = useRouter();
   const [holdingsMap, setHoldingsMap] = useState<HoldingsMap>({});
   const [loadingOverlap, setLoadingOverlap] = useState(false);
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
@@ -793,6 +799,8 @@ export default function PortfolioScreen() {
             )}
           </View>
 
+          
+
           {/* Sector */}
           <View style={[s.card, { marginTop: 10 }]}>
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('sector')} activeOpacity={0.75}>
@@ -872,7 +880,13 @@ export default function PortfolioScreen() {
         <View style={{ height: 24 }} />
       </ScrollView>
 
-      <PortfolioActionSheet visible={showActionSheet} onClose={() => setShowActionSheet(false)} onAddAsset={() => setShowAddAsset(true)} onManage={() => setShowManage(true)} />
+      <PortfolioActionSheet
+      visible={showActionSheet}
+      onClose={() => setShowActionSheet(false)}
+      onAddAsset={() => setShowAddAsset(true)}
+      onManage={() => setShowManage(true)}
+      onHistory={() => router.push('/portfolio/transactions')}
+    />
       <AddAssetModal visible={showAddAsset} onClose={() => setShowAddAsset(false)} onAdded={handlePortfolioChange} existingPositions={positions} />
       <ManagePortfolioModal visible={showManage} onClose={() => setShowManage(false)} positions={positions} onRemoved={handlePortfolioChange} onDeleteAll={handlePortfolioChange} />
     </View>
@@ -962,4 +976,5 @@ const s = StyleSheet.create({
   divAnnual: { fontSize: 12, color: '#C8D8F0', width: 72 },
   divYield: { fontSize: 12, color: '#00C896', fontWeight: '600', width: 48 },
   divFreq: { fontSize: 11, color: '#4A6080', width: 64, textAlign: 'right' },
+  posSummaryCard: { backgroundColor: '#141A26', borderRadius: 14, marginHorizontal: 16, marginBottom: 16, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)', overflow: 'hidden' },
 });

@@ -118,11 +118,13 @@ export default function HomeScreen() {
         }
       >
         {/* Hero Card — only shown if user has portfolio holdings */}
-        {(hasValues || loading) && (
+        
           <View style={styles.heroCard}>
             <Text style={styles.heroLabel}>TOTAL PORTFOLIO VALUE</Text>
             <Text style={styles.heroValue}>
-              {loading ? '—' : `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              {loading ? '—' : hasValues
+                ? `$${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : '$0.00'}
             </Text>
             {hasValues && !loading && (
               <View style={styles.heroRow}>
@@ -142,6 +144,9 @@ export default function HomeScreen() {
                   {totalChangePct >= 0 ? '↑' : '↓'} {Math.abs(totalChangePct).toFixed(2)}%
                 </Text>
               </View>
+            )}
+            {!hasValues && !loading && (
+              <Text style={styles.noQtyHint}>Add a transaction in Portfolio to see your total value</Text>
             )}
             <View style={styles.heroMeta}>
               <View style={styles.heroMetaItem}>
@@ -166,7 +171,7 @@ export default function HomeScreen() {
               </View>
             </View>
           </View>
-        )}
+        
 
         {/* WATCHLIST — all tracked tickers with live prices */}
         {allWatchItems.length > 0 && (
@@ -286,6 +291,7 @@ const styles = StyleSheet.create({
   gainBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
   gainText: { fontSize: 13 },
   heroPct: { fontSize: 14 },
+  noQtyHint: { fontSize: 12, color: '#4A6080', marginBottom: 16, fontStyle: 'italic' },
   heroMeta: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)', paddingTop: 14 },
   heroMetaItem: {},
   metaLabel: { fontSize: 10, color: '#3A5070', letterSpacing: 1, marginBottom: 2 },
