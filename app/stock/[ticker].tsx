@@ -3,15 +3,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Dimensions, ScrollView, StatusBar,
-  StyleSheet, Switch, Text, TouchableOpacity, View,
+  ActivityIndicator, Dimensions, LayoutAnimation, Platform, ScrollView, StatusBar,
+  StyleSheet, Switch, Text, TouchableOpacity, UIManager, View,
 } from 'react-native';
+import TransactionRow, { TransactionRowData } from '../../components/TransactionRow';
+import { usePortfolioTransactions } from '../hooks/usePortfolioTransactions';
+import { calculatePositionFIFO } from '../hooks/useTransactionEngine';
+
 import InteractiveChart from '../../components/InteractiveChart';
 import { useSingleChartPoints } from '../hooks/useChartPoints';
 import {
   StockSummary, formatMarketCap, formatVolume,
   getETFDividends, getETFHistory, getETFPrice, getStockSummary,
 } from '../services/api';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const TABS = ['Overview', 'Financials', 'Dividends', 'Alerts'];
 const CHART_PERIODS = ['1D', '1W', '1M', '3M', '1Y', '5Y'];
@@ -78,6 +86,14 @@ export default function StockDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [starred, setStarred] = useState(false);
   const [alerts, setAlerts] = useState<Record<string, boolean>>({});
+  const [posExpanded, setPosExpanded] = useState(false);
+  const { transactions } = usePortfolioTransactions();
+  const tickerTransactions = transactions
+    .filter(t => t.ticker === ticker)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  const position = tickerTransactions.length > 0
+    ? calculatePositionFIFO(ticker ?? '', transactions, summary?.price ?? 0)
+    : null;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { points: chartPoints, loading: chartLoading, isPositive: chartPositive } = useSingleChartPoints({
@@ -185,6 +201,80 @@ export default function StockDetailScreen() {
                 </TouchableOpacity>
               ))}
             </View>
+
+           {/* POSITION SUMMARY — collapsible, only shown if user holds this ticker */}
+            {position && position.totalShares > 0 && (
+              <View style={s.posSummaryCard}>
+                <TouchableOpacity
+                  style={s.posSummaryHeader}
+                  onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setPosExpanded(!posExpanded); }}
+                  activeOpacity={0.75}
+                >
+                  <View style={[s.posIcon, { backgroundColor: '#338DFF22' }]}>
+                    <Ionicons name="briefcase-outline" size={20} color="#338DFF" />
+                  </View>
+                  <View style={s.posHeaderText}>
+                    <Text style={s.posSummaryTitle}>POSITION SUMMARY</Text>
+                    <Text style={s.posHeaderSub}>
+                      {position.totalShares.toLocaleString('en-US', { maximumFractionDigits: 4 })} shares · ${position.marketValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Text>
+                  </View>
+                  <Text style={[s.posHeaderReturn, { color: position.unrealizedGainPct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                    {position.unrealizedGainPct >= 0 ? '+' : ''}{position.unrealizedGainPct.toFixed(2)}%
+                  </Text>
+                  <Ionicons name={posExpanded ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
+                </TouchableOpacity>
+
+                {posExpanded && (
+                  <View style={s.posExpanded}>
+                    <View style={s.posSummaryRow}>
+                      <View style={s.posSummaryItem}>
+                        <Text style={s.posSummaryLabel}>Shares</Text>
+                        <Text style={s.posSummaryValue}>{position.totalShares.toLocaleString('en-US', { maximumFractionDigits: 4 })}</Text>
+                      </View>
+                      <View style={s.posSummaryItem}>
+                        <Text style={s.posSummaryLabel}>Avg Cost</Text>
+                        <Text style={s.posSummaryValue}>${position.avgCost.toFixed(2)}</Text>
+                      </View>
+                      <View style={s.posSummaryItem}>
+                        <Text style={s.posSummaryLabel}>Market Value</Text>
+                        <Text style={s.posSummaryValue}>${position.marketValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                      </View>
+                    </View>
+                    <View style={s.posSummaryDivider} />
+                    <View style={s.posSummaryRow}>
+                      <View style={s.posSummaryItem}>
+                        <Text style={s.posSummaryLabel}>Unrealized Gain</Text>
+                        <Text style={[s.posSummaryValue, { color: position.unrealizedGain >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                          {position.unrealizedGain >= 0 ? '+' : ''}${position.unrealizedGain.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </Text>
+                      </View>
+                      <View style={s.posSummaryItem}>
+                        <Text style={s.posSummaryLabel}>Return</Text>
+                        <Text style={[s.posSummaryValue, { color: position.unrealizedGainPct >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                          {position.unrealizedGainPct >= 0 ? '+' : ''}{position.unrealizedGainPct.toFixed(2)}%
+                        </Text>
+                      </View>
+                    </View>
+
+                    {tickerTransactions.length > 0 && (
+                      <>
+                        <View style={s.posSummaryDivider} />
+                        <View style={s.txHeaderRow}>
+                          <Text style={s.posSummaryLabel}>RECENT TRANSACTIONS</Text>
+                          <TouchableOpacity onPress={() => router.push(`/portfolio/transactions?ticker=${ticker}`)}>
+                            <Text style={s.viewAllTxText}>View All →</Text>
+                          </TouchableOpacity>
+                        </View>
+                        {tickerTransactions.slice(0, 3).map((txn) => (
+                          <TransactionRow key={txn.transactionId} transaction={txn as TransactionRowData} showTicker={false} />
+                        ))}
+                      </>
+                    )}
+                  </View>
+                )}
+              </View>
+            )} 
             <View style={s.statsCard}>
               {[
                 { label: 'Market Cap', value: formatMarketCap(summary?.marketCap ?? 0) },
@@ -337,4 +427,19 @@ const s = StyleSheet.create({
   alertLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   alertText: { fontSize: 14, color: '#4A6080' },
   alertsNote: { fontSize: 11, color: '#4A6080', paddingHorizontal: 16, marginTop: 4, lineHeight: 16 },
+  posSummaryCard: { backgroundColor: '#141A26', borderRadius: 14, marginHorizontal: 16, marginBottom: 16, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)', overflow: 'hidden' },
+  posSummaryHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 10 },
+  posIcon: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  posHeaderText: { flex: 1 },
+  posSummaryTitle: { fontSize: 10, color: '#4A6A9A', letterSpacing: 1.2, marginBottom: 2 },
+  posHeaderSub: { fontSize: 12, color: '#C8D8F0' },
+  posHeaderReturn: { fontSize: 13, fontWeight: '700', marginRight: 4 },
+  posExpanded: { borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)', padding: 16 },
+  posSummaryRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  posSummaryItem: { flex: 1 },
+  posSummaryLabel: { fontSize: 10, color: '#4A6080', marginBottom: 4, letterSpacing: 0.5 },
+  posSummaryValue: { fontSize: 14, fontWeight: '600', color: '#E8EEF8', fontVariant: ['tabular-nums'] },
+  posSummaryDivider: { height: 0.5, backgroundColor: 'rgba(255,255,255,0.06)', marginVertical: 14 },
+  txHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  viewAllTxText: { fontSize: 11, color: '#338DFF', fontWeight: '600' },
 });
