@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { usePortfolioTransactions } from './hooks/usePortfolioTransactions';
 
 const POPULAR_ETFS = [
   { ticker: 'SCHD', name: 'Schwab US Dividend Equity ETF' },
@@ -17,6 +18,7 @@ const POPULAR_ETFS = [
 
 export default function SetupScreen() {
   const router = useRouter();
+  const { addTransaction } = usePortfolioTransactions();
   const [step, setStep] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -51,13 +53,24 @@ export default function SetupScreen() {
   });
   await AsyncStorage.setItem('watchlist_items', JSON.stringify(newWatchlist));
 
-    // Only tickers with qty > 0 go to portfolio
-    const portfolioTickers = selected.filter(ticker => {
+    // Only tickers with qty > 0 become real BUY transactions. Positions are
+    // always derived from the transaction log now (Rule 1) — there is no
+    // separate userHoldings/userETFs list to maintain.
+    for (const ticker of selected) {
       const qty = parseFloat(holdings[ticker]?.qty || '0');
-      return qty > 0;
-    });
-    await AsyncStorage.setItem('userETFs', JSON.stringify(portfolioTickers));
-    await AsyncStorage.setItem('userHoldings', JSON.stringify(holdings));
+      if (qty > 0) {
+        const cost = parseFloat(holdings[ticker]?.cost || '0') || 0;
+        await addTransaction({
+          ticker,
+          assetType: 'ETF',
+          transactionType: 'BUY',
+          quantity: qty,
+          pricePerShare: cost,
+          notes: 'Added during onboarding',
+        });
+      }
+    }
+    await AsyncStorage.setItem('onboarding_complete', 'true');
   } catch (e) {
     console.error('Failed to save ETF data', e);
   }

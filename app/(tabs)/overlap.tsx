@@ -9,10 +9,11 @@ import {
 } from 'react-native';
 import Svg, { Circle, G } from 'react-native-svg';
 import InteractiveChart from '../../components/InteractiveChart';
-import { usePortfolioChartPoints } from '../hooks/useChartPoints';
+import { ChartMode, usePortfolioChartPoints } from '../hooks/useChartPoints';
 import { ETFPosition, usePortfolioData } from '../hooks/usePortfolioData';
-import { usePortfolioTransactions } from '../hooks/usePortfolioTransactions';
+import { usePortfolioSnapshots } from '../hooks/usePortfolioSnapshots';
 
+import { AddTransactionInput, usePortfolioTransactions } from '../hooks/usePortfolioTransactions';
 import { getETFDividends, getETFTopHoldings, searchAsset } from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -30,6 +31,13 @@ const CHART_H = 120;
 const USER_ETFS_KEY = 'userETFs';
 const USER_HOLDINGS_KEY = 'userHoldings';
 const SNAPSHOT_KEY = 'portfolio_value_snapshots';
+
+// STABILIZATION MODE (Rule 5): Performance chart, snapshots, profit and
+// contribution calculations, and benchmark comparisons are disabled while
+// we verify transactions/positions/quantities/asset survival are solid.
+// Flip this back to true once that's confirmed — no other code changes
+// needed, the snapshot engine itself also respects this flag.
+const PERFORMANCE_ENABLED = false;
 
 const SYMBOL_SECTOR: Record<string, string> = {
   AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AVGO: 'Technology',
@@ -189,9 +197,10 @@ interface AddAssetModalProps {
   onClose: () => void;
   onAdded: () => void;
   existingPositions: ETFPosition[];
+  addTransaction: (input: AddTransactionInput) => Promise<any>;
 }
 
-function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAssetModalProps) {
+function AddAssetModal({ visible, onClose, onAdded, existingPositions, addTransaction }: AddAssetModalProps) {
   const [step, setStep] = useState<'search' | 'details'>('search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -203,7 +212,7 @@ function AddAssetModal({ visible, onClose, onAdded, existingPositions }: AddAsse
   const [saving, setSaving] = useState(false);
   const [isExisting, setIsExisting] = useState(false);
   const [transactionType, setTransactionType] = useState<'BUY' | 'SELL'>('BUY');
-  const { addTransaction } = usePortfolioTransactions();
+  
   
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => {
@@ -237,12 +246,6 @@ async function handleSave() {
   if (isNaN(qtyNum) || qtyNum <= 0) return;
   setSaving(true);
   try {
-    const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
-    const etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-    if (!etfs.includes(selected.ticker)) {
-      etfs.push(selected.ticker);
-      await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
-    }
     await addTransaction({
       ticker: selected.ticker,
       assetType: selected.type ?? 'ETF',
@@ -377,32 +380,20 @@ interface ManageModalProps {
   positions: ETFPosition[];
   onRemoved: () => void;
   onDeleteAll: () => void;
+  deleteAllForTicker: (ticker: string) => Promise<void>;
+  resetAll: () => Promise<void>;
 }
 
-function ManagePortfolioModal({ visible, onClose, positions, onRemoved, onDeleteAll }: ManageModalProps) {
+function ManagePortfolioModal({ visible, onClose, positions, onRemoved, onDeleteAll, deleteAllForTicker, resetAll }: ManageModalProps) {
   const [removing, setRemoving] = useState<string | null>(null);
 
   async function handleRemove(ticker: string) {
   setRemoving(ticker);
   try {
-    // Remove from userETFs
-    const etfsRaw = await AsyncStorage.getItem(USER_ETFS_KEY);
-    let etfs: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-    etfs = etfs.filter(t => t !== ticker);
-    await AsyncStorage.setItem(USER_ETFS_KEY, JSON.stringify(etfs));
-
-    // Remove from userHoldings
-    const holdingsRaw = await AsyncStorage.getItem(USER_HOLDINGS_KEY);
-    const holdings: Record<string, any> = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-    delete holdings[ticker];
-    await AsyncStorage.setItem(USER_HOLDINGS_KEY, JSON.stringify(holdings));
-
-    // Remove from portfolio_transactions
-    const txRaw = await AsyncStorage.getItem('portfolio_transactions');
-    const txns: any[] = txRaw ? JSON.parse(txRaw) : [];
-    const filtered = txns.filter(t => t.ticker !== ticker);
-    await AsyncStorage.setItem('portfolio_transactions', JSON.stringify(filtered));
-
+    // Rule 2: the transaction store is the only writer. Deleting a ticker
+    // means deleting its transactions — there is no separate holdings list
+    // to keep in sync anymore.
+    await deleteAllForTicker(ticker);
     onRemoved();
   } catch (e) { console.error('Remove error:', e); }
   setRemoving(null);
@@ -412,12 +403,16 @@ function ManagePortfolioModal({ visible, onClose, positions, onRemoved, onDelete
   Alert.alert('Delete Portfolio', 'This will remove all positions and reset your portfolio. This cannot be undone.', [
     { text: 'Cancel', style: 'cancel' },
     { text: 'Delete All', style: 'destructive', onPress: async () => {
+      await resetAll();
+      // Defensive cleanup of legacy/orphaned keys from older versions —
+      // nothing should write these anymore, but a full reset should leave
+      // no stale data behind for anything that might still read them.
       await AsyncStorage.multiRemove([
         USER_ETFS_KEY,
         USER_HOLDINGS_KEY,
         SNAPSHOT_KEY,
-        'portfolio_transactions',
-        'v1_5_migration_complete',
+        'portfolio_daily_snapshots',
+        'portfolio_daily_snapshots_meta',
       ]);
       onDeleteAll();
       onClose();
@@ -555,6 +550,20 @@ export default function PortfolioScreen() {
   const [showActionSheet, setShowActionSheet] = useState(false);
   const [showAddAsset, setShowAddAsset] = useState(false);
   const [showManage, setShowManage] = useState(false);
+  const { transactions, ready: transactionsReady, addTransaction, deleteAllForTicker, resetAll } = usePortfolioTransactions();
+  const { snapshots, rebuilding: snapshotsRebuilding } = usePortfolioSnapshots(transactions, transactionsReady, PERFORMANCE_ENABLED);
+  const [chartMode, setChartMode] = useState<ChartMode>('performance');
+
+  useEffect(() => {
+    AsyncStorage.getItem('chart_mode_preference').then((saved) => {
+      if (saved) setChartMode(saved as ChartMode);
+    });
+  }, []);
+  useEffect(() => {
+    AsyncStorage.setItem('chart_mode_preference', chartMode);
+  }, [chartMode]);
+
+  const latestSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 
   const FALLBACK_YIELDS: Record<string, number> = {
     SCHD: 0.0365, VTI: 0.0152, QQQM: 0.0064, JEPI: 0.0819,
@@ -567,10 +576,15 @@ export default function PortfolioScreen() {
   }, []));
 
   const { points: chartPoints, loading: chartLoading, isPositive: chartPositive, pctChange } =
-    usePortfolioChartPoints({
-      positions: positions.map(p => ({ ticker: p.ticker, qty: p.qty })),
-      period: perfPeriod, chartW: CHART_W, chartH: CHART_H, liveTotal: totalValue,
-    });
+  usePortfolioChartPoints({
+    snapshots,
+    rebuilding: snapshotsRebuilding,
+    period: perfPeriod,
+    mode: chartMode,
+    chartW: CHART_W,
+    chartH: CHART_H,
+    liveTotal: totalValue,
+  });
 
   const chartLiveValue = perfPeriod === 'Today' && totalValue > 0 ? totalValue : undefined;
   const lineColor = chartPositive ? '#00C896' : '#FF5A5F';
@@ -706,34 +720,117 @@ export default function PortfolioScreen() {
         </View>
 
         <View style={s.section}>
-          <Text style={s.sectionTitle}>PERFORMANCE</Text>
-          {positions.length === 0 ? (
-            <View style={{ alignItems: 'center', paddingVertical: 30 }}>
-              <Text style={{ fontSize: 22, fontWeight: '700', color: '#4A6080' }}>+0.00%</Text>
-              <Text style={{ fontSize: 12, color: '#2A3A54', marginTop: 4 }}>No positions</Text>
+        <Text style={s.sectionTitle}>PERFORMANCE</Text>
+        {!PERFORMANCE_ENABLED ? (
+          <View style={{ alignItems: 'center', paddingVertical: 30, gap: 8 }}>
+            <Ionicons name="construct-outline" size={28} color="#2A3A54" />
+            <Text style={{ fontSize: 13, color: '#4A6080', textAlign: 'center' }}>
+              Performance tracking is temporarily paused while we stabilize the data layer.
+            </Text>
+          </View>
+        ) : positions.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+            <Text style={{ fontSize: 14, color: '#4A6080', textAlign: 'center' }}>
+              Add your first investment to start tracking performance.
+            </Text>
+          </View>
+        ) : snapshotsRebuilding ? (
+          <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+            <ActivityIndicator color="#007FFF" />
+            <Text style={{ fontSize: 12, color: '#4A6080', marginTop: 10 }}>Calculating performance history…</Text>
+          </View>
+        ) : snapshots.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+            <Text style={{ fontSize: 13, color: '#4A6080', textAlign: 'center' }}>
+              Performance data is unavailable.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={s.modeRow}>
+              {([
+                { key: 'performance', label: 'Performance %' },
+                { key: 'value', label: 'Value' },
+                { key: 'profit', label: 'Profit' },
+                { key: 'contributions', label: 'Contributions' },
+                { key: 'dividends', label: 'Dividends' },
+              ] as { key: ChartMode; label: string }[]).map((m) => (
+                <TouchableOpacity
+                  key={m.key}
+                  style={[s.modeChip, chartMode === m.key && s.modeChipActive]}
+                  onPress={() => setChartMode(m.key)}
+                >
+                  <Text style={[s.modeChipText, chartMode === m.key && s.modeChipTextActive]}>{m.label}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-          ) : (
-            <>
-              <View style={s.periodRow}>
-                {PERF_PERIODS.map((p) => (
-                  <TouchableOpacity key={p} style={s.periodBtn} onPress={() => setPerfPeriod(p)}>
-                    <Text style={[s.periodText, perfPeriod === p && s.periodTextActive]}>{p}</Text>
-                    {perfPeriod === p && <View style={s.periodUnderline} />}
-                  </TouchableOpacity>
-                ))}
+
+            <View style={s.periodRow}>
+              {PERF_PERIODS.map((p) => (
+                <TouchableOpacity key={p} style={s.periodBtn} onPress={() => setPerfPeriod(p)}>
+                  <Text style={[s.periodText, perfPeriod === p && s.periodTextActive]}>{p}</Text>
+                  {perfPeriod === p && <View style={s.periodUnderline} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {pctChange !== null && (
+              <View style={s.pctRow}>
+                <Text style={[s.pctText, { color: lineColor }]}>
+                  {(pctChange ?? 0) >= 0 ? '▲' : '▼'} {(pctChange ?? 0) >= 0 ? '+' : ''}{(pctChange ?? 0).toFixed(2)}%
+                </Text>
+                <Text style={s.pctLabel}>{perfPeriod} return</Text>
               </View>
-              {pctChange !== null && (
-                <View style={s.pctRow}>
-                  <Text style={[s.pctText, { color: lineColor }]}>{(pctChange ?? 0) >= 0 ? '▲' : '▼'} {(pctChange ?? 0) >= 0 ? '+' : ''}{(pctChange ?? 0).toFixed(2)}%</Text>
-                  <Text style={s.pctLabel}>{perfPeriod} return</Text>
+            )}
+
+            <View style={s.chartArea}>
+              <InteractiveChart
+                points={chartPoints}
+                width={CHART_W}
+                height={CHART_H}
+                color={lineColor}
+                loading={chartLoading}
+                liveValue={chartMode === 'value' ? chartLiveValue : undefined}
+                liveLabel="Now"
+                formatValue={(v) =>
+                  chartMode === 'performance'
+                    ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+                    : `$${v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                }
+              />
+            </View>
+
+            {latestSnapshot && (
+              <View style={s.metricsGrid}>
+                <View style={s.metricCell}>
+                  <Text style={s.metricLabel}>Portfolio Value</Text>
+                  <Text style={s.metricValue}>${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
                 </View>
-              )}
-              <View style={s.chartArea}>
-                <InteractiveChart points={chartPoints} width={CHART_W} height={CHART_H} color={lineColor} loading={chartLoading} liveValue={chartLiveValue} liveLabel="Now" formatValue={(v) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`} />
+                <View style={s.metricCell}>
+                  <Text style={s.metricLabel}>Contributions</Text>
+                  <Text style={[s.metricValue, { color: '#004F98' }]}>${latestSnapshot.contributions.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</Text>
+                </View>
+                <View style={s.metricCell}>
+                  <Text style={s.metricLabel}>Profit</Text>
+                  <Text style={[s.metricValue, { color: latestSnapshot.profit >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                    {latestSnapshot.profit >= 0 ? '+' : ''}${latestSnapshot.profit.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </Text>
+                </View>
+                <View style={s.metricCell}>
+                  <Text style={s.metricLabel}>Return</Text>
+                  <Text style={[s.metricValue, { color: latestSnapshot.cumulativeReturn >= 0 ? '#00C896' : '#FF5A5F' }]}>
+                    {latestSnapshot.cumulativeReturn >= 0 ? '+' : ''}{(latestSnapshot.cumulativeReturn * 100).toFixed(2)}%
+                  </Text>
+                </View>
+                <View style={s.metricCell}>
+                  <Text style={s.metricLabel}>Dividends</Text>
+                  <Text style={[s.metricValue, { color: '#338DFF' }]}>${latestSnapshot.dividendIncome.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</Text>
+                </View>
               </View>
-            </>
-          )}
-        </View>
+            )}
+          </>
+        )}
+      </View>
 
         {positions.length > 0 && <View style={s.section}>
           <Text style={s.sectionTitle}>ANALYTICS</Text>
@@ -887,8 +984,8 @@ export default function PortfolioScreen() {
       onManage={() => setShowManage(true)}
       onHistory={() => router.push('/portfolio/transactions')}
     />
-      <AddAssetModal visible={showAddAsset} onClose={() => setShowAddAsset(false)} onAdded={handlePortfolioChange} existingPositions={positions} />
-      <ManagePortfolioModal visible={showManage} onClose={() => setShowManage(false)} positions={positions} onRemoved={handlePortfolioChange} onDeleteAll={handlePortfolioChange} />
+      <AddAssetModal visible={showAddAsset} onClose={() => setShowAddAsset(false)} onAdded={handlePortfolioChange} existingPositions={positions} addTransaction={addTransaction} />
+      <ManagePortfolioModal visible={showManage} onClose={() => setShowManage(false)} positions={positions} onRemoved={handlePortfolioChange} onDeleteAll={handlePortfolioChange} deleteAllForTicker={deleteAllForTicker} resetAll={resetAll} />
     </View>
   );
 }
@@ -977,4 +1074,13 @@ const s = StyleSheet.create({
   divYield: { fontSize: 12, color: '#00C896', fontWeight: '600', width: 48 },
   divFreq: { fontSize: 11, color: '#4A6080', width: 64, textAlign: 'right' },
   posSummaryCard: { backgroundColor: '#141A26', borderRadius: 14, marginHorizontal: 16, marginBottom: 16, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)', overflow: 'hidden' },
+  modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 },
+  modeChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, backgroundColor: '#0B0F19', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)' },
+  modeChipActive: { backgroundColor: '#007FFF18', borderColor: '#007FFF' },
+  modeChipText: { fontSize: 11, color: '#4A6080', fontWeight: '600' },
+  modeChipTextActive: { color: '#007FFF' },
+  metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 16, paddingTop: 14, borderTopWidth: 0.5, borderTopColor: 'rgba(255,255,255,0.06)' },
+  metricCell: { minWidth: '28%' },
+  metricLabel: { fontSize: 10, color: '#4A6080', marginBottom: 3, letterSpacing: 0.3 },
+  metricValue: { fontSize: 14, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'] },
 });

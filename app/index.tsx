@@ -1,13 +1,26 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+
+const ONBOARDING_COMPLETE_KEY = 'onboarding_complete';
 
 export default function SplashScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      router.replace('/onboarding');
+    const timer = setTimeout(async () => {
+      try {
+        const done = await AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY);
+        if (done === 'true') {
+          router.replace('/(tabs)');
+        } else {
+          router.replace('/onboarding');
+        }
+      } catch (e) {
+        console.error('Failed to check onboarding status:', e);
+        router.replace('/onboarding');
+      }
     }, 2500);
     return () => clearTimeout(timer);
   }, []);

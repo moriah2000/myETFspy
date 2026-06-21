@@ -3,48 +3,20 @@
  * Fetches price/portfolio history and normalizes it into ChartPoint[] for InteractiveChart.
  *
  * Two modes:
- *   Single-ticker  — for ETF/Stock/Crypto detail screens
- *   Multi-ticker   — for Portfolio (weighted sum of qty × price)
+ *   Single-ticker  — for ETF/Stock/Crypto detail screens (UNCHANGED from V1.5)
+ *   Multi-ticker   — for Portfolio (now snapshot-driven, TWR-based — V1.6)
  *
- * For Portfolio "Today" period, also manages the rolling value snapshot
- * in AsyncStorage so the chart auto-updates as live prices change.
+ * V1.6 CHANGE: usePortfolioChartPoints no longer live-weights historical prices
+ * by current quantity (which incorrectly back-projected today's share count
+ * across periods before the shares were even purchased). It now reads from
+ * usePortfolioSnapshots, which derives daily values from actual transaction
+ * history + historical prices, with proper TWR for the Performance % mode.
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChartPoint } from '../../components/InteractiveChart';
 import { getETFHistory } from '../services/api';
-
-// ── Snapshot store (Portfolio Today) ─────────────────────────
-const SNAPSHOT_KEY = 'portfolio_value_snapshots';
-const MAX_SNAPSHOTS = 390; // ~1 trading day at 1-min intervals
-const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-
-interface Snapshot {
-  ts: number;   // Unix ms
-  value: number;
-}
-
-async function loadSnapshots(): Promise<Snapshot[]> {
-  try {
-    const raw = await AsyncStorage.getItem(SNAPSHOT_KEY);
-    if (!raw) return [];
-    const snaps: Snapshot[] = JSON.parse(raw);
-    const cutoff = Date.now() - SNAPSHOT_TTL_MS;
-    return snaps.filter(s => s.ts > cutoff);
-  } catch {
-    return [];
-  }
-}
-
-async function appendSnapshot(value: number): Promise<Snapshot[]> {
-  const snaps = await loadSnapshots();
-  snaps.push({ ts: Date.now(), value });
-  // Keep only MAX_SNAPSHOTS most recent
-  const trimmed = snaps.slice(-MAX_SNAPSHOTS);
-  await AsyncStorage.setItem(SNAPSHOT_KEY, JSON.stringify(trimmed));
-  return trimmed;
-}
+import { DailySnapshot } from './useSnapshotEngine';
 
 // ── Date label helpers ────────────────────────────────────────
 function formatLabel(ts: number, period: string): string {
@@ -58,7 +30,12 @@ function formatLabel(ts: number, period: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
-// ── Single-ticker hook (ETF / Stock / Crypto detail) ──────────
+function formatLabelFromISODate(isoDate: string, period: string): string {
+  const ts = new Date(isoDate + 'T00:00:00').getTime();
+  return formatLabel(ts, period);
+}
+
+// ── Single-ticker hook (ETF / Stock / Crypto detail) — UNCHANGED ──
 interface SingleOptions {
   ticker: string;
   period: string;
@@ -106,151 +83,142 @@ export function useSingleChartPoints(
   return { points, loading, isPositive };
 }
 
-// ── Multi-ticker hook (Portfolio) ─────────────────────────────
-interface PortfolioTickerPos {
-  ticker: string;
-  qty: number;
+// ── Chart mode type ────────────────────────────────────────────
+export type ChartMode = 'performance' | 'value' | 'profit' | 'contributions' | 'dividends';
+
+// ── Period -> number of calendar days to slice from snapshots ──
+const PERIOD_DAYS: Record<string, number | null> = {
+  'Today': 1,
+  '1D': 1,
+  '1W': 7,
+  '1M': 30,
+  '3M': 90,
+  '6M': 180,
+  'YTD': null, // special-cased below
+  '1Y': 365,
+  '5Y': 1825,
+  'ALL': null, // entire history
+};
+
+function sliceSnapshotsForPeriod(snapshots: DailySnapshot[], period: string): DailySnapshot[] {
+  if (snapshots.length === 0) return [];
+
+  if (period === 'YTD') {
+    const yearStart = `${new Date().getFullYear()}-01-01`;
+    return snapshots.filter(s => s.date >= yearStart);
+  }
+  if (period === 'ALL') return snapshots;
+
+  const days = PERIOD_DAYS[period] ?? 365;
+  if (days === 1) {
+    // "Today"/"1D" — just the most recent snapshot (single point, will show as flat line)
+    return snapshots.slice(-1);
+  }
+  return snapshots.slice(-days);
 }
 
+// ── Extract the relevant value for a given chart mode from a snapshot ──
+function valueForMode(snapshot: DailySnapshot, mode: ChartMode): number {
+  switch (mode) {
+    case 'performance': return snapshot.cumulativeReturn * 100; // as percentage
+    case 'value': return snapshot.portfolioValue;
+    case 'profit': return snapshot.profit;
+    case 'contributions': return snapshot.contributions;
+    case 'dividends': return snapshot.dividendIncome;
+    default: return snapshot.portfolioValue;
+  }
+}
+
+// ── Multi-ticker hook (Portfolio) — V1.6 snapshot-driven ──────
 interface MultiOptions {
-  positions: PortfolioTickerPos[];
+  snapshots: DailySnapshot[];
+  rebuilding: boolean;
   period: string;
+  mode: ChartMode;
   chartW: number;
   chartH: number;
-  /** Pass totalValue here so "Today" snapshots stay current */
+  /** Pass current live total here so "Today" mode reflects intraday price moves */
   liveTotal?: number;
 }
 
 export function usePortfolioChartPoints(
-  { positions, period, chartW, chartH, liveTotal }: MultiOptions
+  { snapshots, rebuilding, period, mode, chartW, chartH, liveTotal }: MultiOptions
 ): {
   points: ChartPoint[];
   loading: boolean;
   isPositive: boolean;
   pctChange: number | null;
-  /** For "Today" period: latest live value to pass as liveValue prop */
   liveValue: number | undefined;
 } {
-  const [points, setPoints] = useState<ChartPoint[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [pctChange, setPctChange] = useState<number | null>(null);
-
-  // "Today" snapshot management
-  const lastSnapshotTotal = useRef<number | null>(null);
-
-  // Append snapshot whenever liveTotal changes materially (> $0.01 change)
-  useEffect(() => {
-    if (period !== 'Today' || !liveTotal || liveTotal <= 0) return;
-    if (
-      lastSnapshotTotal.current === null ||
-      Math.abs(liveTotal - lastSnapshotTotal.current) > 0.01
-    ) {
-      lastSnapshotTotal.current = liveTotal;
-      appendSnapshot(liveTotal);
-    }
-  }, [liveTotal, period]);
-
-  // Fetch / rebuild points when period or positions change
-  useEffect(() => {
-    if (positions.length === 0) return;
-    let cancelled = false;
-    setLoading(true);
-    setPoints([]);
-    setPctChange(null);
-
-    async function load() {
-      // "Today" — use AsyncStorage snapshots
-      if (period === 'Today') {
-        const snaps = await loadSnapshots();
-        if (cancelled) return;
-        if (snaps.length < 2) {
-          // Not enough snapshots yet — show flat line at current value
-          if (liveTotal && liveTotal > 0) {
-            const now = Date.now();
-            const flat: ChartPoint[] = [
-              { x: 0, y: chartH / 2, value: liveTotal, label: formatLabel(now - 3600_000, 'Today') },
-              { x: chartW, y: chartH / 2, value: liveTotal, label: formatLabel(now, 'Today') },
-            ];
-            if (!cancelled) { setPoints(flat); setPctChange(0); setLoading(false); }
-          } else {
-            if (!cancelled) setLoading(false);
-          }
-          return;
-        }
-
-        const vals = snaps.map(s => s.value);
-        const minV = Math.min(...vals);
-        const maxV = Math.max(...vals);
-        const range = maxV - minV || 1;
-        const PAD_TOP = 12, PAD_BOTTOM = 4;
-
-        const pts: ChartPoint[] = snaps.map((s, i) => ({
-          x: (i / (snaps.length - 1)) * chartW,
-          y: PAD_TOP + (1 - (s.value - minV) / range) * (chartH - PAD_TOP - PAD_BOTTOM),
-          value: s.value,
-          label: formatLabel(s.ts, 'Today'),
-        }));
-
-        const pct = ((snaps[snaps.length - 1].value - snaps[0].value) / snaps[0].value) * 100;
-        if (!cancelled) { setPoints(pts); setPctChange(pct); setLoading(false); }
-        return;
-      }
-
-      // All other periods — fetch historical prices
-      const source = positions.filter(p => p.qty > 0).length > 0
-        ? positions.filter(p => p.qty > 0)
-        : positions;
-
-      const histories = await Promise.all(
-        source.map(p => getETFHistory(p.ticker, period))
-      );
-      if (cancelled) return;
-
-      const minLen = Math.min(...histories.map(h => h.length));
-      if (minLen < 2) { setLoading(false); return; }
-
-      // Build weighted portfolio value series
-      const combined: { ts: number; val: number }[] = [];
-      for (let i = 0; i < minLen; i++) {
-        const val = source.reduce((sum, p, idx) => {
-          return sum + (histories[idx][i]?.close ?? 0) * (p.qty > 0 ? p.qty : 1);
-        }, 0);
-        combined.push({ ts: histories[0][i].timestamp, val });
-      }
-
-      if (combined.length < 2) { if (!cancelled) setLoading(false); return; }
-
-      const vals = combined.map(d => d.val);
-      const minV = Math.min(...vals);
-      const maxV = Math.max(...vals);
-      const range = maxV - minV || 1;
-      const PAD_TOP = 12, PAD_BOTTOM = 4;
-
-      const pts: ChartPoint[] = combined.map((d, i) => ({
-        x: (i / (combined.length - 1)) * chartW,
-        y: PAD_TOP + (1 - (d.val - minV) / range) * (chartH - PAD_TOP - PAD_BOTTOM),
-        value: d.val,
-        label: formatLabel(d.ts * 1000, period),
-      }));
-
-      const pct = ((combined[combined.length - 1].val - combined[0].val) / combined[0].val) * 100;
-      if (!cancelled) { setPoints(pts); setPctChange(pct); setLoading(false); }
+  const result = useMemo(() => {
+    if (rebuilding || snapshots.length === 0) {
+      return { points: [] as ChartPoint[], pctChange: null as number | null };
     }
 
-    load().catch(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [
-    period,
-    positions.map(p => `${p.ticker}:${p.qty}`).join(','),
-    chartW, chartH,
-  ]);
+    const sliced = sliceSnapshotsForPeriod(snapshots, period);
+    if (sliced.length === 0) {
+      return { points: [] as ChartPoint[], pctChange: null as number | null };
+    }
 
-  const isPositive = (pctChange ?? 0) >= 0;
+    // For "Today"/"1D" with only one snapshot point, synthesize a flat line
+    // using liveTotal so the chart isn't a single dot.
+    if (sliced.length === 1 && liveTotal && mode === 'value') {
+      const baseValue = sliced[0].portfolioValue;
+      const pts: ChartPoint[] = [
+        { x: 0, y: chartH / 2, value: baseValue, label: formatLabelFromISODate(sliced[0].date, period) },
+        { x: chartW, y: chartH / 2, value: liveTotal, label: 'Now' },
+      ];
+      const pct = baseValue > 0 ? ((liveTotal - baseValue) / baseValue) * 100 : 0;
+      return { points: pts, pctChange: pct };
+    }
 
-  // For "Today" period, pass liveTotal as liveValue so the last point auto-updates
-  const liveValue = (period === 'Today' && liveTotal && liveTotal > 0)
+    if (sliced.length < 2) {
+      return { points: [] as ChartPoint[], pctChange: null as number | null };
+    }
+
+    const vals = sliced.map(s => valueForMode(s, mode));
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV || 1;
+    const PAD_TOP = 12, PAD_BOTTOM = 4;
+
+    const pts: ChartPoint[] = sliced.map((s, i) => {
+      const v = valueForMode(s, mode);
+      return {
+        x: (i / (sliced.length - 1)) * chartW,
+        y: PAD_TOP + (1 - (v - minV) / range) * (chartH - PAD_TOP - PAD_BOTTOM),
+        value: v,
+        label: formatLabelFromISODate(s.date, period),
+      };
+    });
+
+    // pctChange is meaningful primarily for 'performance' and 'value' modes
+    let pct: number;
+    if (mode === 'performance') {
+      // cumulativeReturn is already relative to inception; show the change WITHIN this slice
+      const startReturn = sliced[0].cumulativeReturn;
+      const endReturn = sliced[sliced.length - 1].cumulativeReturn;
+      pct = ((1 + endReturn) / (1 + startReturn) - 1) * 100;
+    } else {
+      const first = vals[0];
+      const last = vals[vals.length - 1];
+      pct = first !== 0 ? ((last - first) / Math.abs(first)) * 100 : 0;
+    }
+
+    return { points: pts, pctChange: pct };
+  }, [snapshots, rebuilding, period, mode, chartW, chartH, liveTotal]);
+
+  const isPositive = (result.pctChange ?? 0) >= 0;
+
+  const liveValue = (mode === 'value' && (period === 'Today' || period === '1D') && liveTotal && liveTotal > 0)
     ? liveTotal
     : undefined;
 
-  return { points, loading, isPositive, pctChange, liveValue };
+  return {
+    points: result.points,
+    loading: rebuilding,
+    isPositive,
+    pctChange: result.pctChange,
+    liveValue,
+  };
 }

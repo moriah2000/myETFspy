@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -43,7 +44,10 @@ export default function OnboardingScreen() {
     <View style={styles.container}>
 
       {/* Skip */}
-      <TouchableOpacity style={styles.skip} onPress={() => router.replace('/(tabs)')}>
+      <TouchableOpacity style={styles.skip} onPress={async () => {
+        await AsyncStorage.setItem('onboarding_complete', 'true');
+        router.replace('/(tabs)');
+      }}>
         <Text style={styles.skipText}>Skip</Text>
       </TouchableOpacity>
 

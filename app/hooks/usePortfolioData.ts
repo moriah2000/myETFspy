@@ -1,6 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// app/hooks/usePortfolioData.ts
+//
+// STABILIZATION MODE — positions are now derived ONLY from the transaction
+// store via calculatePositionFIFO/calculateAllPositions (useTransactionEngine.ts).
+// The previous version blended legacy userHoldings/userETFs with its own
+// non-FIFO recompute and short-circuited to an empty list whenever userETFs
+// was empty, regardless of what was actually in the transaction log — that
+// split was the direct cause of assets/quantities appearing to vanish on
+// Home/Portfolio while the transaction log itself was fine.
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getETFPrice } from '../services/api';
+import { calculateAllPositions } from './useTransactionEngine';
+import { usePortfolioTransactions } from './usePortfolioTransactions';
 
 export type ETFPosition = {
   ticker: string;
@@ -25,9 +36,15 @@ export const ETF_COLORS: Record<string, string> = {
   QQQI: '#E879F9',
 };
 
+const FALLBACK_COLORS = ['#338DFF','#00C896','#FF9F43','#A78BFA','#FF5A5F','#66AFFF','#FFD93D','#E879F9','#4FC3F7'];
 const REFRESH_INTERVAL = 10 * 1000;
 
+function log(event: string, data?: unknown) {
+  console.log(`[STABILIZE][usePortfolioData] ${event}`, data ?? '');
+}
+
 export function usePortfolioData() {
+  const { transactions, ready: transactionsReady } = usePortfolioTransactions();
   const [positions, setPositions] = useState<ETFPosition[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -37,86 +54,60 @@ export function usePortfolioData() {
   const fetchData = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
     try {
-      const [etfsRaw, holdingsRaw] = await Promise.all([
-        AsyncStorage.getItem('userETFs'),
-        AsyncStorage.getItem('userHoldings'),
-      ]);
-      const tickers: string[] = etfsRaw ? JSON.parse(etfsRaw) : [];
-      if (tickers.length === 0) {
+      if (!transactionsReady) {
+        return;
+      }
+
+      // Every distinct ticker that has ever appeared in the transaction log.
+      // calculateAllPositions itself filters out anything with zero net
+      // shares, so it's safe to fetch a price for all of them up front.
+      const allTickers = [...new Set(transactions.map(t => t.ticker))];
+
+      if (allTickers.length === 0) {
+        log('No tickers in transaction log', { transactionCount: transactions.length });
         setPositions([]);
         setLoading(false);
         setRefreshing(false);
+        setLastUpdated(new Date());
         return;
       }
-      const holdingsData = holdingsRaw ? JSON.parse(holdingsRaw) : {};
-
-      // Also read transactions and calculate positions from them
-      const txRaw = await AsyncStorage.getItem('portfolio_transactions');
-      const transactions: any[] = txRaw ? JSON.parse(txRaw) : [];
-
-      // Build a shares/cost map from transactions (simple weighted average)
-      const txMap: Record<string, { qty: number; totalCost: number }> = {};
-      for (const txn of transactions) {
-        if (!txMap[txn.ticker]) txMap[txn.ticker] = { qty: 0, totalCost: 0 };
-        if (txn.transactionType === 'BUY') {
-          txMap[txn.ticker].qty += txn.quantity;
-          txMap[txn.ticker].totalCost += txn.quantity * txn.pricePerShare;
-        } else if (txn.transactionType === 'SELL') {
-          txMap[txn.ticker].qty -= txn.quantity;
-        }
-      }
-
-      // Merge: transactions take priority over legacy holdings
-      const mergedHoldings: Record<string, { qty: number; avgCost: number }> = {};
-      // First load legacy holdings
-      for (const ticker of tickers) {
-        const h = holdingsData[ticker];
-        if (h) {
-          mergedHoldings[ticker] = {
-            qty: parseFloat(String(h.qty || '0')),
-            avgCost: parseFloat(String(h.cost || '0')),
-          };
-        }
-      }
-      // Override/add with transaction-derived positions
-      for (const [ticker, pos] of Object.entries(txMap)) {
-        if (pos.qty > 0) {
-          mergedHoldings[ticker] = {
-            qty: pos.qty,
-            avgCost: pos.qty > 0 ? pos.totalCost / pos.qty : 0,
-          };
-        }
-      }
-
-      // Add any transaction tickers not already in tickers list
-      const txTickers = Object.keys(txMap).filter(t => !tickers.includes(t) && txMap[t].qty > 0);
-      const allTickers = [...tickers, ...txTickers];
 
       const prices = await Promise.all(allTickers.map((t) => getETFPrice(t)));
-      const data: ETFPosition[] = allTickers.map((ticker, i) => {
-        const p = prices[i];
-        const qty = mergedHoldings[ticker]?.qty ?? 0;
-        const avgCost = mergedHoldings[ticker]?.avgCost ?? 0;
+      const priceMap: Record<string, number> = {};
+      allTickers.forEach((ticker, i) => { priceMap[ticker] = prices[i]?.price ?? 0; });
+
+      const fifoPositions = calculateAllPositions(transactions, priceMap);
+
+      const data: ETFPosition[] = fifoPositions.map((pos, i) => {
+        const p = prices[allTickers.indexOf(pos.ticker)];
         return {
-          ticker,
+          ticker: pos.ticker,
           price: p?.price ?? 0,
           change: p?.change ?? 0,
           pct: p?.changesPercentage ?? 0,
-          qty,
-          avgCost,
-          value: qty > 0 ? qty * (p?.price ?? 0) : 0,
-          color: ETF_COLORS[ticker] || ['#338DFF','#00C896','#FF9F43','#A78BFA','#FF5A5F','#66AFFF','#FFD93D','#E879F9','#4FC3F7'][i % 9],
+          qty: pos.totalShares,
+          avgCost: pos.avgCost,
+          value: pos.marketValue,
+          color: ETF_COLORS[pos.ticker] || FALLBACK_COLORS[i % FALLBACK_COLORS.length],
         };
       });
+
+      log('Positions recomputed', {
+        transactionCount: transactions.length,
+        positionCount: data.length,
+        totalShares: Object.fromEntries(data.map(d => [d.ticker, d.qty])),
+        totalValue: data.reduce((s, d) => s + d.value, 0),
+      });
+
       setPositions(data);
       setLastUpdated(new Date());
     } catch (e) {
-      console.error('Portfolio fetch error:', e);
+      console.error('[STABILIZE][usePortfolioData] Portfolio fetch error:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [transactions, transactionsReady]);
 
   const reset = useCallback(() => {
     setPositions([]);
