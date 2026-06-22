@@ -539,7 +539,7 @@ txTypeBtnText: { fontSize: 14, fontWeight: '700', color: '#4A6080' },
 
 // ── Main Screen ───────────────────────────────────────────────
 export default function PortfolioScreen() {
-  const { positions, loading, refreshing, totalValue, hasValues, refresh, reset, startFetching } = usePortfolioData();
+  const { positions, loading, refreshing, totalValue, hasValues, refresh } = usePortfolioData();
   const router = useRouter();
   const [holdingsMap, setHoldingsMap] = useState<HoldingsMap>({});
   const [loadingOverlap, setLoadingOverlap] = useState(false);
@@ -571,8 +571,9 @@ export default function PortfolioScreen() {
   };
 
   useFocusEffect(useCallback(() => {
-    startFetching();
-    return () => { reset(); setExpandedCard(null); setExpandedPair(null); setHoldingsMap({}); };
+    // PortfolioDataProvider manages its own interval app-wide — no need to
+    // start/stop it here. Just clear local UI state when leaving the tab.
+    return () => { setExpandedCard(null); setExpandedPair(null); setHoldingsMap({}); };
   }, []));
 
   const { points: chartPoints, loading: chartLoading, isPositive: chartPositive, pctChange } =

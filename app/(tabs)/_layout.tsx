@@ -1,73 +1,19 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { Stack } from 'expo-router';
+import { PortfolioDataProvider } from './hooks/usePortfolioData';
+import { TransactionStoreProvider } from './hooks/usePortfolioTransactions';
 
-export default function TabLayout() {
+export default function RootLayout() {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: '#0E1322',
-          borderTopColor: 'rgba(255,255,255,0.06)',
-          borderTopWidth: 0.5,
-          height: 65,
-          paddingBottom: 10,
-          paddingTop: 8,
-        },
-        tabBarActiveTintColor: '#338DFF',
-        tabBarInactiveTintColor: '#2A3A54',
-        tabBarLabelStyle: {
-          fontSize: 9,
-          fontWeight: '500',
-          letterSpacing: 0.3,
-        },
-        tabBarHideOnKeyboard: true,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Watchlist',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="eye" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="alerts"
-        options={{
-          title: 'Alerts',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="notifications" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="overlap"
-        options={{
-          title: 'Portfolio',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="pie-chart" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings" size={size} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
+    <TransactionStoreProvider>
+      <PortfolioDataProvider>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="onboarding" />
+          <Stack.Screen name="setup" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="etf/[ticker]" />
+        </Stack>
+      </PortfolioDataProvider>
+    </TransactionStoreProvider>
   );
 }

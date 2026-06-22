@@ -23,7 +23,7 @@ export default function HomeScreen() {
   const {
     positions, loading, refreshing,
     totalValue, totalChange, totalChangePct,
-    hasValues, refresh, reset, startFetching,
+    hasValues, refresh,
   } = usePortfolioData();
 
   const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
@@ -31,9 +31,8 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      startFetching();
       loadWatchlist();
-      return () => reset();
+      // PortfolioDataProvider manages its own interval — no startFetching needed.
     }, [])
   );
 
