@@ -653,17 +653,7 @@ export default function PortfolioScreen() {
   }
 
   function handlePortfolioChange() {
-    // STABILIZATION FIX: usePortfolioData already reacts automatically
-    // whenever the shared transaction store updates (its internal effect
-    // depends on `transactions`), so it refetches/recomputes on its own
-    // the moment addTransaction/deleteAllForTicker/resetAll finish. Calling
-    // reset()+startFetching() here as well raced against that automatic
-    // refetch — reset() wiped positions to empty immediately, then
-    // startFetching() re-fetched using a closure that could still be one
-    // render behind the real transaction update, producing a visible
-    // "disappears, then flip-flops between two values" pattern.
-    // holdingsMap (used for overlap/sector analytics) isn't derived from
-    // the transaction store, so it still needs an explicit clear here.
+    refresh();
     setHoldingsMap({});
   }
 
