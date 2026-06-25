@@ -1,7 +1,5 @@
 // app/(tabs)/settings.tsx
-// Added: DATA & BACKUP section with Export Portfolio entry.
-// All existing sections (ACCOUNT, PREFERENCES, SUPPORT, Premium, Logout)
-// are unchanged.
+// DATA & BACKUP section: Export and Import now active. Health + Last Backup coming in Features 3 & 4.
 
 import { useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -46,8 +44,8 @@ export default function SettingsScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.menuRow, styles.menuRowBorder]}
-          disabled>
-          <Text style={[styles.menuText, styles.menuTextDisabled]}>Import Portfolio</Text>
+          onPress={() => router.push('/settings/import')}>
+          <Text style={styles.menuText}>Import Portfolio</Text>
           <Text style={styles.menuArrow}>›</Text>
         </TouchableOpacity>
         <TouchableOpacity

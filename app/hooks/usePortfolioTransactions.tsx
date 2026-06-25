@@ -217,6 +217,7 @@ type TransactionStoreValue = {
   getForTicker: (ticker: string) => Transaction[];
   reload: () => Promise<void>;
   resetAll: () => Promise<void>;
+  importTransactions: (transactions: Transaction[]) => Promise<void>;
 };
 
 const TransactionStoreContext = createContext<TransactionStoreValue | null>(null);
@@ -345,10 +346,25 @@ export function TransactionStoreProvider({ children }: { children: React.ReactNo
     });
   }, [ready]);
 
+  // importTransactions — bulk restore from a validated backup.
+  // Preserves all original transactionIds, dates, and timestamps exactly as exported.
+  // Does NOT regenerate IDs or timestamps.
+  const importTransactions = useCallback(async (incoming: Transaction[]): Promise<void> => {
+    if (!ready) throw new Error('TransactionStore not ready');
+    return enqueueWrite(async () => {
+      await AsyncStorage.setItem(KEYS.INTENTIONALLY_CLEARED, 'true');
+      await persist(incoming);
+      await AsyncStorage.removeItem(KEYS.INTENTIONALLY_CLEARED);
+      setTransactions(incoming);
+      log('importTransactions', { restoredCount: incoming.length });
+    });
+  }, [ready]);
+
   const value: TransactionStoreValue = {
     transactions, ready, migrationError,
     addTransaction, deleteTransaction, deleteAllForTicker,
     editTransaction, getForTicker, reload, resetAll,
+    importTransactions,
   };
 
   return (
