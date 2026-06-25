@@ -140,8 +140,8 @@ function checkOversells(txns: Transaction[]): HealthCheck {
     return { id: 'oversells', label: 'Oversell Transactions', status: 'healthy', message: 'No oversell transactions detected.' };
   }
   return {
-    id: 'oversells', label: 'Oversell Transactions', status: 'warning',
-    message: `${oversellTxnIds.length} potential oversell(s) detected.`,
+    id: 'oversells', label: 'Oversell Transactions', status: 'error',
+    message: `${oversellTxnIds.length} historical oversell(s) detected — invalid accounting activity.`,
     affectedIds: oversellTxnIds,
   };
 }
@@ -151,6 +151,19 @@ function checkEmptyPortfolio(txns: Transaction[]): HealthCheck {
     return { id: 'empty', label: 'Portfolio Data', status: 'warning', message: 'No transactions found in portfolio.' };
   }
   return { id: 'empty', label: 'Portfolio Data', status: 'healthy', message: `${txns.length} transaction(s) found.` };
+}
+
+function checkFutureDates(txns: Transaction[]): HealthCheck {
+  const today = new Date().toISOString().slice(0, 10);
+  const bad = txns.filter(t => typeof t.date === 'string' && t.date > today);
+  if (bad.length === 0) {
+    return { id: 'future_dates', label: 'Future-Dated Transactions', status: 'healthy', message: 'No future-dated transactions found.' };
+  }
+  return {
+    id: 'future_dates', label: 'Future-Dated Transactions', status: 'warning',
+    message: `${bad.length} transaction(s) have dates in the future — may distort performance calculations.`,
+    affectedIds: bad.map(t => t.transactionId),
+  };
 }
 
 // ─── Main function ────────────────────────────────────────────────────────────
@@ -164,6 +177,7 @@ export function runHealthChecks(transactions: Transaction[]): HealthReport {
     checkInvalidQuantities(transactions),
     checkDuplicateIds(transactions),
     checkMalformedDates(transactions),
+    checkFutureDates(transactions),
     checkMissingTickers(transactions),
     checkOversells(transactions),
   ];

@@ -116,6 +116,16 @@ export async function exportPortfolio(): Promise<ExportResult> {
 
     log('File written', { fileUri, sizeBytes: json.length });
 
+    // Record backup timestamp immediately after successful file creation.
+    // Written here rather than after share — a valid backup file exists
+    // regardless of whether the user sends it anywhere.
+    try {
+      await AsyncStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
+      log('Backup date recorded');
+    } catch {
+      log('WARNING: Failed to record backup date');
+    }
+
     const sharingAvailable = await Sharing.isAvailableAsync();
     if (!sharingAvailable) {
       log('Sharing not available');
@@ -127,14 +137,6 @@ export async function exportPortfolio(): Promise<ExportResult> {
       dialogTitle: 'Save your myETFspy backup',
       UTI: 'public.json',
     });
-
-    // Record backup timestamp for Backup Status display
-    try {
-      await AsyncStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
-      log('Backup date recorded');
-    } catch {
-      log('WARNING: Failed to record backup date');
-    }
 
     log('Export complete', { filename });
     return { ok: true, filename };
