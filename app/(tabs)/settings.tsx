@@ -50,8 +50,8 @@ export default function SettingsScreen() {
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.menuRow, styles.menuRowBorder]}
-          disabled>
-          <Text style={[styles.menuText, styles.menuTextDisabled]}>Portfolio Health</Text>
+          onPress={() => router.push('/settings/health')}>
+          <Text style={styles.menuText}>Portfolio Health</Text>
           <Text style={styles.menuArrow}>›</Text>
         </TouchableOpacity>
         <TouchableOpacity
