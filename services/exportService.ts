@@ -1,6 +1,7 @@
-// app/services/exportService.ts
+// services/exportService.ts
 //
 // READ-ONLY export service. Never writes to any portfolio store.
+// Writes lastBackupDate to AsyncStorage after successful export.
 // Logging prefix: [EXPORT]
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -9,6 +10,8 @@ const FS = require('expo-file-system/legacy') as any;
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Sharing from 'expo-sharing';
 import { BACKUP_SCHEMA_VERSION } from '../app/constants/backupSchema';
+import { LAST_BACKUP_KEY } from '../hooks/useBackupStatus';
+
 const STORAGE_KEYS = {
   TRANSACTIONS: 'portfolio_transactions',
   WATCHLIST: 'watchlist_items',
@@ -59,15 +62,11 @@ function parseSafely(raw: string | null, label: string): unknown[] {
 }
 
 function validatePayload(payload: ExportPayload): string | null {
-  if (payload.schemaVersion !== BACKUP_SCHEMA_VERSION) {
-    return `Invalid schema version: ${payload.schemaVersion}`;
-  }
+  if (payload.schemaVersion !== BACKUP_SCHEMA_VERSION) return `Invalid schema version: ${payload.schemaVersion}`;
   if (!payload.exportTimestamp) return 'Missing export timestamp';
   if (!Array.isArray(payload.transactions)) return 'transactions field is not an array';
   if (!Array.isArray(payload.watchlist)) return 'watchlist field is not an array';
-  if (!payload.preferences || typeof payload.preferences !== 'object') {
-    return 'preferences field is missing or invalid';
-  }
+  if (!payload.preferences || typeof payload.preferences !== 'object') return 'preferences field is missing or invalid';
   return null;
 }
 
@@ -82,10 +81,7 @@ export async function exportPortfolio(): Promise<ExportResult> {
         AsyncStorage.getItem(STORAGE_KEYS.ONBOARDING),
       ]);
 
-    log('Storage read complete', {
-      hasTransactions: !!transactionsRaw,
-      hasWatchlist: !!watchlistRaw,
-    });
+    log('Storage read complete', { hasTransactions: !!transactionsRaw, hasWatchlist: !!watchlistRaw });
 
     const transactions = parseSafely(transactionsRaw, 'transactions');
     const watchlist = parseSafely(watchlistRaw, 'watchlist');
@@ -107,10 +103,7 @@ export async function exportPortfolio(): Promise<ExportResult> {
       return { ok: false, error: `Validation failed: ${validationError}` };
     }
 
-    log('Validation passed', {
-      transactionCount: transactions.length,
-      watchlistCount: watchlist.length,
-    });
+    log('Validation passed', { transactionCount: transactions.length, watchlistCount: watchlist.length });
 
     const filename = `myETFspy-backup-${todayFileSafe()}.json`;
     const cacheDir: string = FS.cacheDirectory ?? FS.documentDirectory ?? '';
@@ -134,6 +127,14 @@ export async function exportPortfolio(): Promise<ExportResult> {
       dialogTitle: 'Save your myETFspy backup',
       UTI: 'public.json',
     });
+
+    // Record backup timestamp for Backup Status display
+    try {
+      await AsyncStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
+      log('Backup date recorded');
+    } catch {
+      log('WARNING: Failed to record backup date');
+    }
 
     log('Export complete', { filename });
     return { ok: true, filename };

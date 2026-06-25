@@ -2,11 +2,19 @@
 // DATA & BACKUP section: Export and Import now active. Health + Last Backup coming in Features 3 & 4.
 
 import { useRouter } from 'expo-router';
+import { useBackupStatus } from '../../hooks/useBackupStatus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
 
 export default function SettingsScreen() {
   const router = useRouter();
-
+  const backupStatus = useBackupStatus();
+  useFocusEffect(
+  useCallback(() => {
+    backupStatus.refresh();
+  }, [backupStatus.refresh])
+);
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -59,9 +67,10 @@ export default function SettingsScreen() {
           disabled>
           <View style={{ flex: 1 }}>
             <Text style={[styles.menuText, styles.menuTextDisabled]}>Last Backup</Text>
-            <Text style={styles.lastBackupValue}>Never</Text>
+            <Text style={[styles.lastBackupValue, backupStatus.hasBackup && styles.lastBackupValueActive]}>
+              {backupStatus.label}
+            </Text>
           </View>
-          <Text style={styles.menuArrow}>›</Text>
         </TouchableOpacity>
       </View>
       {/* ─────────────────────────────────────────────────────────── */}
@@ -104,6 +113,7 @@ const styles = StyleSheet.create({
   menuTextDisabled: { color: '#4A6A9A' },
   menuArrow: { fontSize: 18, color: '#4A6080' },
   lastBackupValue: { fontSize: 12, color: '#4A6080', marginTop: 2 },
+  lastBackupValueActive: { color: '#00C896' },
   premiumCard: { backgroundColor: '#0D1830', borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.3)', alignItems: 'center' },
   premiumTitle: { fontSize: 18, fontWeight: '700', color: '#E8EEF8', marginBottom: 8 },
   premiumSub: { fontSize: 12, color: '#4A6080', textAlign: 'center', lineHeight: 18, marginBottom: 16 },
