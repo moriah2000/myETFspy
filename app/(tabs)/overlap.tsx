@@ -622,7 +622,7 @@ export default function PortfolioScreen() {
   useFocusEffect(useCallback(() => {
     // PortfolioDataProvider manages its own interval app-wide — no need to
     // start/stop it here. Just clear local UI state when leaving the tab.
-    return () => { setExpandedCard(null); setExpandedPair(null); setHoldingsMap({}); };
+    return () => { setExpandedCard(null); setExpandedPair(null); }; // holdingsMap intentionally preserved across tab visits
   }, []));
 
   const { points: chartPoints, loading: chartLoading, isPositive: chartPositive, pctChange } =
@@ -674,15 +674,8 @@ export default function PortfolioScreen() {
     fetchYields();
   }, [positions.map(p => p.ticker).join(',')]);
 
-  useEffect(() => {
-    if (positions.length === 0 || Object.keys(holdingsMap).length > 0) return;
-    async function prefetch() {
-      const results: HoldingsMap = {};
-      await Promise.all(positions.map(async (p) => { const h = await getETFTopHoldings(p.ticker); if (h.length) results[p.ticker] = h; }));
-      setHoldingsMap(results);
-    }
-    prefetch();
-  }, [positions.map(p => p.ticker).join(',')]);
+  // holdingsMap is populated on-demand via loadOverlap() when user opens the Overlap Analyzer.
+  // No background prefetch — avoids racing with loadOverlap and avoids unnecessary API calls.
 
   const getYield = (ticker: string) => realYields[ticker] ?? FALLBACK_YIELDS[ticker] ?? 0;
   const annualIncome = positions.reduce((sum, p) => sum + p.value * getYield(p.ticker), 0);
@@ -730,7 +723,10 @@ export default function PortfolioScreen() {
 
   const sectorData = computeSectorExposure(positions, holdingsMap, totalValue);
   const healthMetrics = computeHealthMetrics(positions, holdingsMap, totalValue);
-  const overallHealth = Math.round(healthMetrics.reduce((a, m) => a + m.score, 0) / healthMetrics.length);
+  const holdingsReady = Object.keys(holdingsMap).length > 0;
+  const overallHealth = holdingsReady
+    ? Math.round(healthMetrics.reduce((a, m) => a + m.score, 0) / healthMetrics.length)
+    : null;
 
   return (
     <View style={s.container}>
@@ -888,7 +884,7 @@ export default function PortfolioScreen() {
       </View>
 
         {positions.length > 0 && <View style={s.section}>
-          <Text style={s.sectionTitle}>ANALYTICS</Text>
+          <Text style={s.sectionTitle}>ETF OVERLAP ANALYSIS</Text>
 
           {/* Overlap */}
           <View style={s.card}>
@@ -984,13 +980,13 @@ export default function PortfolioScreen() {
             <TouchableOpacity style={s.cardHeader} onPress={() => toggleCard('health')} activeOpacity={0.75}>
               <View style={[s.cardIcon, { backgroundColor: '#FF9F4322' }]}><Ionicons name="fitness-outline" size={22} color="#FF9F43" /></View>
               <View style={s.cardText}><Text style={s.cardTitle}>Portfolio Health Score</Text><Text style={s.cardSub}>Diversification, risk, and concentration rating</Text></View>
-              <View style={s.healthPill}><Text style={[s.healthPillText, { color: overallHealth >= 70 ? '#00C896' : '#FF9F43' }]}>{overallHealth}</Text></View>
+              <View style={s.healthPill}><Text style={[s.healthPillText, { color: overallHealth === null ? '#4A6080' : overallHealth >= 70 ? '#00C896' : '#FF9F43' }]}>{overallHealth === null ? '—' : overallHealth}</Text></View>
               <Ionicons name={expandedCard === 'health' ? 'chevron-up' : 'chevron-down'} size={16} color="#4A6080" />
             </TouchableOpacity>
             {expandedCard === 'health' && (
               <View style={s.expanded}>
                 {healthMetrics.map((m) => (<View key={m.label} style={s.healthRow}><Text style={s.healthLabel}>{m.label}</Text><View style={s.barBg}><View style={[s.barFill, { width: `${m.score}%` as any, backgroundColor: m.color }]} /></View><Text style={[s.healthScore, { color: m.color }]}>{m.score}</Text></View>))}
-                <View style={s.insight}><Ionicons name="bulb-outline" size={14} color="#FF9F43" /><Text style={s.insightText}>{overallHealth >= 80 ? 'Excellent portfolio health. Well diversified with low overlap.' : overallHealth >= 60 ? 'Good diversification with moderate concentration risk.' : 'Consider spreading across more ETFs to improve health score.'}</Text></View>
+                <View style={s.insight}><Ionicons name="bulb-outline" size={14} color="#FF9F43" /><Text style={s.insightText}>{overallHealth === null ? 'Open the Overlap Analyzer to calculate your health score.' : overallHealth >= 80 ? 'Excellent portfolio health. Well diversified with low overlap.' : overallHealth >= 60 ? 'Good diversification with moderate concentration risk.' : 'Consider spreading across more ETFs to improve health score.'}</Text></View>
               </View>
             )}
           </View>
@@ -1138,4 +1134,11 @@ const s = StyleSheet.create({
   metricCell: { minWidth: '28%' },
   metricLabel: { fontSize: 10, color: '#4A6080', marginBottom: 3, letterSpacing: 0.3 },
   metricValue: { fontSize: 14, fontWeight: '700', color: '#E8EEF8', fontVariant: ['tabular-nums'] },
+  analyticsLink: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: 'rgba(51,141,255,0.08)', borderRadius: 10,
+    padding: 12, marginTop: 10,
+    borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.2)',
+  },
+  analyticsLinkText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#338DFF' },
 });

@@ -1,3 +1,8 @@
+// app/(tabs)/_layout.tsx
+//
+// Tab structure: Home, Watchlist, Portfolio, Analytics, Settings
+// Alerts removed from tab bar — now accessible via bell icon in Home header.
+
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 
@@ -23,6 +28,7 @@ export default function TabLayout() {
         },
         tabBarHideOnKeyboard: true,
       }}>
+
       <Tabs.Screen
         name="index"
         options={{
@@ -32,6 +38,7 @@ export default function TabLayout() {
           ),
         }}
       />
+
       <Tabs.Screen
         name="explore"
         options={{
@@ -41,15 +48,7 @@ export default function TabLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="alerts"
-        options={{
-          title: 'Alerts',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="notifications" size={size} color={color} />
-          ),
-        }}
-      />
+
       <Tabs.Screen
         name="overlap"
         options={{
@@ -59,6 +58,17 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      <Tabs.Screen
+        name="analytics"
+        options={{
+          title: 'Analytics',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="bar-chart" size={size} color={color} />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="settings"
         options={{
@@ -68,6 +78,15 @@ export default function TabLayout() {
           ),
         }}
       />
+
+      {/* Keep alerts as a route but hide from tab bar */}
+      <Tabs.Screen
+        name="alerts"
+        options={{
+          href: null, // hidden from tab bar, still navigable
+        }}
+      />
+
     </Tabs>
   );
 }

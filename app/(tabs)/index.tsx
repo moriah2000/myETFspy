@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   RefreshControl, ScrollView, StatusBar, StyleSheet,
-  Text, View,
+  Text, TouchableOpacity, View,
 } from 'react-native';
 import { ETF_COLORS, usePortfolioData } from '../hooks/usePortfolioData';
 import { getETFPrice } from '../services/api';
@@ -20,6 +20,7 @@ type WatchItem = {
 };
 
 export default function HomeScreen() {
+  const router = useRouter();
   const {
     positions, loading, refreshing,
     totalValue, totalChange, totalChangePct,
@@ -104,9 +105,12 @@ export default function HomeScreen() {
         <View>
           <Text style={styles.greeting}>{greeting}, Investor! 👋</Text>
         </View>
-        <View style={styles.premiumBadge}>
-          <Text style={styles.premiumText}>Premium</Text>
-        </View>
+        <TouchableOpacity
+          style={styles.alertsBell}
+          onPress={() => router.push('/(tabs)/alerts')}
+          activeOpacity={0.7}>
+          <Ionicons name="notifications-outline" size={22} color="#C8D8F0" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -295,6 +299,7 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1, paddingHorizontal: 20 },
   greeting: { fontSize: 18, fontWeight: '700', color: '#E8EEF8' },
+  alertsBell: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 20 },
   premiumBadge: { backgroundColor: '#FFD93D22', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
   premiumText: { fontSize: 11, fontWeight: '700', color: '#FFD93D' },
   heroCard: { backgroundColor: '#141A26', borderRadius: 16, padding: 22, marginBottom: 20, borderWidth: 0.5, borderColor: 'rgba(51,141,255,0.25)' },

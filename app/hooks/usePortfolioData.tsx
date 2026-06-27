@@ -22,12 +22,14 @@ import { calculateAllPositions } from './useTransactionEngine';
 
 export type ETFPosition = {
   ticker: string;
+  assetType: string;       // 'ETF' | 'STOCK' | 'CRYPTO' — from FIFO engine
   price: number;
   change: number;
   pct: number;
   value: number;
   qty: number;
   avgCost: number;
+  totalCostBasis: number;  // FIFO cost of remaining lots — used for Yield on Cost
   color: string;
 };
 
@@ -52,6 +54,7 @@ type PortfolioDataValue = {
   totalValue: number;
   totalChange: number;
   totalChangePct: number;
+  totalCostBasis: number;  // sum of FIFO cost basis across all positions — for Yield on Cost
   hasValues: boolean;
   refresh: () => void;
 };
@@ -112,11 +115,13 @@ export function PortfolioDataProvider({ children }: { children: React.ReactNode 
         const p = prices[allTickers.indexOf(pos.ticker)];
         return {
           ticker: pos.ticker,
+          assetType: pos.assetType,
           price: p?.price ?? 0,
           change: p?.change ?? 0,
           pct: p?.changesPercentage ?? 0,
           qty: pos.totalShares,
           avgCost: pos.avgCost,
+          totalCostBasis: pos.totalCostBasis,
           value: pos.marketValue,
           color: ETF_COLORS[pos.ticker] || FALLBACK_COLORS[i % FALLBACK_COLORS.length],
         };
@@ -150,6 +155,7 @@ export function PortfolioDataProvider({ children }: { children: React.ReactNode 
   const totalValue = positions.reduce((sum, p) => sum + p.value, 0);
   const totalChange = positions.reduce((sum, p) => sum + p.qty * p.change, 0);
   const totalChangePct = totalValue > 0 ? (totalChange / (totalValue - totalChange)) * 100 : 0;
+  const totalCostBasis = positions.reduce((sum, p) => sum + p.totalCostBasis, 0);
 
   const value: PortfolioDataValue = {
     positions,
@@ -159,6 +165,7 @@ export function PortfolioDataProvider({ children }: { children: React.ReactNode 
     totalValue,
     totalChange,
     totalChangePct,
+    totalCostBasis,
     hasValues: totalValue > 0,
     refresh: () => fetchData(true),
   };

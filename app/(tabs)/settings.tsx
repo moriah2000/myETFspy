@@ -4,17 +4,11 @@
 import { useRouter } from 'expo-router';
 import { useBackupStatus } from '../../hooks/useBackupStatus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const backupStatus = useBackupStatus();
-  useFocusEffect(
-  useCallback(() => {
-    backupStatus.refresh();
-  }, [backupStatus.refresh])
-);
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
