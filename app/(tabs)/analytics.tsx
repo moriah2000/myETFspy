@@ -35,7 +35,7 @@ const ANALYTICS_ITEMS: AnalyticsItem[] = [
   },
   {
     title: 'Portfolio Insights',
-    subtitle: 'Top holdings, diversification & risk',
+    subtitle: 'Actionable insights, risk alerts & achievements',
     icon: 'bulb-outline',
     route: '/analytics/insights',
     available: true,
