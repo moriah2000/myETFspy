@@ -6,7 +6,7 @@
 // Logging prefix: [DIVIDEND]
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getETFDividends } from '../app/services/api';
+import { getETFDividends, getNextDividendDates } from '../app/services/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,8 +43,6 @@ type DividendCache = Record<string, { data: DividendData; updatedAt: number }>;
 const CACHE_KEY = 'dividend_cache';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_CACHE_TICKERS = 50;
-const PROXY_URL = 'https://myetfspy-proxy.vercel.app';
-const YAHOO_BASE = 'https://query1.finance.yahoo.com';
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -167,35 +165,12 @@ function resolveAnnualDividend(
   return { annualDps: 0, perPayment: 0, source: 'none' };
 }
 
-// ─── Fetch next ex-date and pay date from Yahoo ───────────────────────────────
+// ─── Fetch next ex-date and pay date ─────────────────────────────────────────
+// Routes through proxy — no direct Yahoo calls from mobile app.
 
 async function fetchNextDates(ticker: string): Promise<{ exDividendDate: string | null; payDate: string | null }> {
   try {
-    const url = `${YAHOO_BASE}/v10/finance/quoteSummary/${ticker}?modules=summaryDetail%2CcalendarEvents`;
-    const res = await fetch(url);
-    if (!res.ok) return { exDividendDate: null, payDate: null };
-    const data = await res.json();
-    const result = data?.quoteSummary?.result?.[0];
-
-    const sd = result?.summaryDetail;
-    const ce = result?.calendarEvents;
-
-    let exDate: string | null = null;
-    let payDate: string | null = null;
-
-    const exRaw = sd?.exDividendDate?.raw ?? ce?.exDividendDate?.raw;
-    if (exRaw) {
-      const d = new Date(exRaw * 1000);
-      if (!isNaN(d.getTime())) exDate = d.toISOString().slice(0, 10);
-    }
-
-    const payRaw = ce?.dividendDate?.raw;
-    if (payRaw) {
-      const d = new Date(payRaw * 1000);
-      if (!isNaN(d.getTime())) payDate = d.toISOString().slice(0, 10);
-    }
-
-    return { exDividendDate: exDate, payDate };
+    return await getNextDividendDates(ticker);
   } catch {
     return { exDividendDate: null, payDate: null };
   }
